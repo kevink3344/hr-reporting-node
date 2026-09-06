@@ -14,7 +14,6 @@ import {
   FileText,
   MessageSquare,
   Search,
-  Settings,
   Share2,
   X
 } from 'lucide-react';
@@ -1138,7 +1137,6 @@ export function ReportsPage({ schools, session, onManage, onOpenRecord, onOpenPo
       <div><p className="eyebrow">Report center</p><h2 id="reports-title">Choose a report.</h2><p className="reports-intro">Browse the available HR reports and spreadsheet exports. Select a school to filter report results.</p></div>
       <div className="report-count"><strong>{reports.length}</strong><span>report options</span></div>
     </div>
-    {isAdmin && onManage && <div className="notice"><Settings size={18} /><span>Admins configure sections and reports under Settings.</span><button className="back-button" onClick={onManage}>Manage in Settings</button></div>}
     <div className="report-toolbar">
       <SchoolCombobox
         schools={schools}
