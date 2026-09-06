@@ -53,7 +53,7 @@ Wake County is ~180–200 schools, but the school selector was a native `<select
 
 ---
 
-## 3) One-click last-run strip (NEXT)
+## 3) One-click last-run strip (DONE — client v0)
 
 ### Problem
 When a user runs a report, remember the last few `{report, school}` combos and surface them as a horizontal strip at the top of the report catalog: `Open Positions — Test Oak — 2h ago`. One click re-runs it.
@@ -65,6 +65,12 @@ When a user runs a report, remember the last few `{report, school}` combos and s
 - **Scoping:** honors RBAC v2 (report_list/org must remain within the caller's allowed set, per roadmap).
 
 **Effort:** S (2–3 days). **Impact:** High — turns "find + select + run" into "click".
+
+### Status: ✅ Shipped (client v0, commit `2c37183`)
+- New `client/src/recentRuns.ts` — per-user `recent-runs` list in `localStorage` (`hr-report:<userId>:recent-runs`), capped at 8, deduped by `{reportId, organization}`. Includes `formatRelativeTime` (just now / Nm / Nh / Nd).
+- `ReportsPage`: records each successful run (`result.report.id`, `result.organization`) and renders a `.recent-runs` strip above the catalog. Chips (`.recent-run-chip`) show report title, organization, relative time; one click (`runFromRecent`) finds the report by id + the school by name, restores both selections, and re-runs.
+- `styles.css`: light + `[data-theme="dark"]` rules for `.recent-runs`, `.recent-run-chip`, etc.
+- **Backlog to upgrade later:** move from `localStorage` to a server `report_recent_runs` log + `GET /api/reports/recent` so history follows the user across devices.
 
 ---
 
