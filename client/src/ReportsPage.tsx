@@ -64,9 +64,9 @@ import type {
 } from './types';
 import { HIGHLIGHT_PALETTE, resolveHighlightNeedle } from './types';
 
-function ReportOption({ report, isAdmin, onOpen }: { report: ReportDefinition; isAdmin: boolean; onOpen: (report: ReportDefinition) => void }) {
+function ReportOption({ report, onOpen }: { report: ReportDefinition; onOpen: (report: ReportDefinition) => void }) {
   const active = report.status === 'active';
-  return <button className="report-option" onClick={() => onOpen(report)} disabled={!active && !isAdmin} title={active ? 'Open report' : isAdmin ? 'Preview inactive report' : 'Report inactive'}>
+  return <button className="report-option" onClick={() => onOpen(report)} disabled={!active} title={active ? 'Open report' : 'Report inactive'}>
     <span className="report-option-icon"><FileText size={19} /></span>
     <span className="report-option-copy"><strong>{report.title}</strong><span>{report.description}</span></span>
     <span className="report-option-meta">{active ? <span className="ready-badge">Ready</span> : <span className="pending-badge">Inactive</span>}</span>
@@ -1164,7 +1164,7 @@ export function ReportsPage({ schools, session, onManage, onOpenRecord, onOpenPo
       : <div className="report-categories">{sections.map((section) => {
         const sectionReports = visibleReports.filter((report) => report.sectionId === section.id);
         if (sectionReports.length === 0) return null;
-        return <section className="report-category" key={section.id}><div className="report-category-heading"><span className="category-icon"><BarChart3 size={17} /></span><h3>{section.title}</h3><span>{sectionReports.length} options</span></div><div className="report-options">{sectionReports.map((report) => <ReportOption key={report.id} report={report} isAdmin={isAdmin} onOpen={openReport} />)}</div></section>;
+        return <section className="report-category" key={section.id}><div className="report-category-heading"><span className="category-icon"><BarChart3 size={17} /></span><h3>{section.title}</h3><span>{sectionReports.length} options</span></div><div className="report-options">{sectionReports.map((report) => <ReportOption key={report.id} report={report} onOpen={openReport} />)}</div></section>;
       })}</div>}
   </section>;
 }
