@@ -453,7 +453,7 @@ function ReportsTab({ session, schools, sections, reports, refresh }: { session:
           {validateState === 'ok' && <span className="ready-badge">Valid</span>}
           {validateState === 'fail' && <span className="pending-badge">Invalid</span>}
           {editing.id && <>
-            <label className="settings-field"><span>Preview organization</span>
+            <label className="settings-field" aria-label="Preview organization">
               <select value={previewOrg} onChange={(event) => setPreviewOrg(event.target.value)}>
                 {schools.map((school) => <option key={school.id} value={school.name}>{school.name}</option>)}
               </select>
