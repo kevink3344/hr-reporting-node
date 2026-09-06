@@ -560,7 +560,7 @@ function ReportsTab({ session, schools, sections, reports, refresh }: { session:
 }
 
 export function SettingsPage({ session, schools }: { session: LoginSession; schools: School[] }) {
-  const [tab, setTab] = useState<Tab>('sections');
+  const [tab, setTab] = useState<Tab>('reports');
   const [sections, setSections] = useState<ReportSection[]>([]);
   const [reports, setReports] = useState<ReportDefinition[]>([]);
   const [loading, setLoading] = useState(true);
