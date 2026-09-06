@@ -245,7 +245,7 @@ function SubreportPreviewCells({ sub, colSpan }: { sub?: GenericSubreportRun | n
 function ReportsTab({ session, schools, sections, reports, refresh }: { session: LoginSession; schools: School[]; sections: ReportSection[]; reports: ReportDefinition[]; refresh: () => Promise<void> }) {
   const [filter, setFilter] = useState('');
   const [editing, setEditing] = useState<Partial<ReportDefinition> & { id?: string } | null>(null);
-  const [editorTab, setEditorTab] = useState<'general' | 'options'>('general');
+  const [editorTab, setEditorTab] = useState<'general' | 'rules' | 'options'>('general');
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
   const [validateState, setValidateState] = useState<'idle' | 'ok' | 'fail'>('idle');
@@ -290,12 +290,12 @@ function ReportsTab({ session, schools, sections, reports, refresh }: { session:
     // Client-side highlight validation: block save if any rule is invalid
     const rules = (editing.highlightRules ?? []) as ReportHighlightRule[];
     for (const r of rules) {
-      if (!r.column.trim()) { setError('Each highlight rule needs a column.'); setEditorTab('options'); return; }
+      if (!r.column.trim()) { setError('Each highlight rule needs a column.'); setEditorTab('rules'); return; }
       const needsValue = r.operator !== 'is_empty' && r.operator !== 'is_not_empty';
-      if (needsValue && !r.value.trim()) { setError(`Rule for "${r.column}" needs a value.`); setEditorTab('options'); return; }
-      if (!needsValue && r.value.trim()) { setError(`Rule for "${r.column}" must have an empty value for "${r.operator}".`); setEditorTab('options'); return; }
+      if (needsValue && !r.value.trim()) { setError(`Rule for "${r.column}" needs a value.`); setEditorTab('rules'); return; }
+      if (!needsValue && r.value.trim()) { setError(`Rule for "${r.column}" must have an empty value for "${r.operator}".`); setEditorTab('rules'); return; }
     }
-    if (rules.length > 10) { setError('At most 10 highlight rules are allowed.'); setEditorTab('options'); return; }
+    if (rules.length > 10) { setError('At most 10 highlight rules are allowed.'); setEditorTab('rules'); return; }
     // Normalize subreport fields (blank query => no subreport).
     const subreportQuery = (editing.subreportQuery ?? '').trim();
     const subreportKeyColumn = subreportQuery ? (editing.subreportKeyColumn ?? 'person_id').trim() || null : null;
@@ -332,7 +332,7 @@ function ReportsTab({ session, schools, sections, reports, refresh }: { session:
       await refresh();
     } catch (failure) {
       const msg = failure instanceof Error ? failure.message : '';
-      if (msg === 'HIGHLIGHT_RULE_INVALID') setEditorTab('options');
+      if (msg === 'HIGHLIGHT_RULE_INVALID') setEditorTab('rules');
       setError(errorMessage(failure, 'The report could not be saved.'));
     }
   }
@@ -419,6 +419,7 @@ function ReportsTab({ session, schools, sections, reports, refresh }: { session:
       </div>
       <div className="settings-tabs" role="tablist" aria-label="Report editor tabs">
         <button role="tab" aria-selected={editorTab === 'general'} className={editorTab === 'general' ? 'settings-tab active' : 'settings-tab'} onClick={() => setEditorTab('general')}>General</button>
+        <button role="tab" aria-selected={editorTab === 'rules'} className={editorTab === 'rules' ? 'settings-tab active' : 'settings-tab'} onClick={() => setEditorTab('rules')}>Rules</button>
         <button role="tab" aria-selected={editorTab === 'options'} className={editorTab === 'options' ? 'settings-tab active' : 'settings-tab'} onClick={() => setEditorTab('options')}>Options</button>
       </div>
       {editorTab === 'general' ? <>
@@ -489,29 +490,7 @@ function ReportsTab({ session, schools, sections, reports, refresh }: { session:
             })}</tbody>
           </table></div>
         </div>}
-      </> : <>
-        <div className="settings-field"><span>Subreport (optional)</span>
-          <p className="highlight-desc">Add a child query that runs once per main row, bound to the row's key column. Child queries must be read-only and reference <code>:person_id</code>.</p>
-          <label className="settings-field">
-            <span>Subreport SQL (must be a single SELECT referencing :person_id)</span>
-            <textarea
-              value={editing.subreportQuery ?? ''}
-              onChange={(event) => { setEditing({ ...editing, subreportQuery: event.target.value }); setValidateState('idle'); }}
-              rows={8}
-              spellCheck={false}
-              placeholder="SELECT area, area_description AS area_desc, years, '' AS program, NCLB AS nclb_code FROM cert_area WHERE person_id = :person_id ORDER BY area"
-            />
-          </label>
-          <label className="settings-field">
-            <span>Subreport key column (row value bound to :person_id)</span>
-            <input
-              value={editing.subreportKeyColumn ?? 'person_id'}
-              onChange={(event) => setEditing({ ...editing, subreportKeyColumn: event.target.value })}
-              placeholder="person_id"
-            />
-          </label>
-          <p className="highlight-hint">Leave Subreport SQL blank to disable the nested table for this report.</p>
-        </div>
+      </> : editorTab === 'rules' ? <>
         <div className="settings-field"><span>Row Highlighting (optional)</span>
           <p className="highlight-desc">When a row matches a rule, the entire row is tinted. First matching rule wins. For the current year use <code>THISYEAR</code> (all caps) and next year use <code>NEXTYEAR</code> (all caps).</p>
           <RowHighlightingEditor
@@ -548,6 +527,29 @@ function ReportsTab({ session, schools, sections, reports, refresh }: { session:
               })}</tbody>
             </table></div>
           </div>}
+        </div>
+      </> : <>
+        <div className="settings-field"><span>Subreport (optional)</span>
+          <p className="highlight-desc">Add a child query that runs once per main row, bound to the row's key column. Child queries must be read-only and reference <code>:person_id</code>.</p>
+          <label className="settings-field">
+            <span>Subreport SQL (must be a single SELECT referencing :person_id)</span>
+            <textarea
+              value={editing.subreportQuery ?? ''}
+              onChange={(event) => { setEditing({ ...editing, subreportQuery: event.target.value }); setValidateState('idle'); }}
+              rows={8}
+              spellCheck={false}
+              placeholder="SELECT area, area_description AS area_desc, years, '' AS program, NCLB AS nclb_code FROM cert_area WHERE person_id = :person_id ORDER BY area"
+            />
+          </label>
+          <label className="settings-field">
+            <span>Subreport key column (row value bound to :person_id)</span>
+            <input
+              value={editing.subreportKeyColumn ?? 'person_id'}
+              onChange={(event) => setEditing({ ...editing, subreportKeyColumn: event.target.value })}
+              placeholder="person_id"
+            />
+          </label>
+          <p className="highlight-hint">Leave Subreport SQL blank to disable the nested table for this report.</p>
         </div>
       </>}
       <div className="settings-form-row">
