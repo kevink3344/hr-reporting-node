@@ -4,6 +4,7 @@ import type {
   Person,
   PersonFavorite,
   PersonRecord,
+  PositionDetails,
   ReportDefinition,
   ReportSection,
   ReportStatus,
@@ -31,6 +32,10 @@ export interface PersonRecordsRepository {
 
 export interface ReportsRepository {
   openPositions(organization: string): Promise<OpenPositionRow[]>;
+}
+
+export interface PositionsRepository {
+  getPositionDetails(posNumber: string, organization: string): Promise<PositionDetails | null>;
 }
 
 export type ReportSectionInput = {
@@ -194,6 +199,7 @@ export type Repositories = {
   schools: SchoolsRepository;
   personRecords: PersonRecordsRepository;
   reports: ReportsRepository;
+  positions: PositionsRepository;
   reportSections: ReportSectionsRepository;
   reportDefinitions: ReportDefinitionsRepository;
   reportViews: ReportViewsRepository;

@@ -5,6 +5,7 @@ import type {
   PersonFavoriteCheck,
   PersonPage,
   PersonRecord,
+  PositionDetails,
   ReportDefinition,
   ReportSection,
   ReportView,
@@ -68,6 +69,12 @@ export async function login(wakeId: string, employeeId: string): Promise<LoginSe
 
 export function getPersonRecord(personId: string): Promise<PersonRecord> {
   return request<PersonRecord>(`/api/people/${encodeURIComponent(personId)}/record`);
+}
+
+// Position Details — read-only view of a single position (incumbent null when vacant).
+export function getPositionDetails(organization: string, posNumber: string): Promise<PositionDetails> {
+  const query = new URLSearchParams({ organization });
+  return request<PositionDetails>(`/api/positions/${encodeURIComponent(posNumber)}?${query.toString()}`);
 }
 
 // ---- Configurable reports (Settings page) ----

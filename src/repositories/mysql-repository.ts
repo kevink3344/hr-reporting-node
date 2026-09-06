@@ -1,4 +1,4 @@
-import type { OpenPositionRow, Person, PersonRecord, School } from '../types.js';
+import type { OpenPositionRow, Person, PersonRecord, PositionDetails, School } from '../types.js';
 import type { Repositories } from './contracts.js';
 import { fixtureRepositories } from './fixture-repository.js';
 import { query } from '../db.js';
@@ -95,6 +95,143 @@ async function openPositions(organization: string): Promise<OpenPositionRow[]> {
   return rows.map(toOpenPosition);
 }
 
+// A single position + its incumbent for the Position Details drawer (MySQL
+// variant). Mirrors the Turso implementation; uses CAST on both sides of the
+// join so the cross-type pos_number matches.
+type PositionDetailSqlRow = {
+  position_id: number | null;
+  pos_start: string | null;
+  pos_ending: string | null;
+  pos_name: string | null;
+  pos_number: number | string | null;
+  fund: string | null;
+  purpose: string | null;
+  program: string | null;
+  object: string | null;
+  level: string | null;
+  cost_center: string | null;
+  months: number | null;
+  administrator: string | null;
+  organization: string | null;
+  calendar: string | null;
+  loc_type: string | null;
+  region: string | null;
+  ss200_code: string | null;
+  account_number: string | null;
+  full_name: string | null;
+  emp_number: string | null;
+  person_id: string | number | null;
+  tenure_code: string | null;
+  tenure_desc: string | null;
+  contract_type: string | null;
+  contract_id: string | null;
+  contract_start: string | null;
+  contract_end: string | null;
+  tap: number | null;
+  a_months: number | null;
+  classroom_assignment: string | null;
+  mailstop: string | null;
+};
+
+const POSITION_DETAIL_SQL = `
+SELECT
+  pi.position_id,
+  pi.pos_start,
+  pi.pos_ending,
+  pi.pos_name,
+  pi.pos_number,
+  pi.fund,
+  pi.purpose,
+  pi.program,
+  pi.object,
+  pi.level,
+  pi.cost_center,
+  pi.months,
+  pi.administrator,
+  pi.organization,
+  pi.calendar,
+  pi.loc_type,
+  pi.region,
+  pi.ss200_code,
+  CONCAT(
+    IFNULL(pi.fund, ''), '-', IFNULL(pi.purpose, ''), '-',
+    IFNULL(pi.program, ''), '-', IFNULL(pi.object, ''), '-',
+    IFNULL(pi.level, ''), '-', IFNULL(pi.cost_center, '')
+  ) AS account_number,
+  IFNULL(e.full_name, '') AS full_name,
+  IFNULL(e.emp_number, '') AS emp_number,
+  e.person_id,
+  IFNULL(e.tenure_code, '') AS tenure_code,
+  IFNULL(e.tenure_desc, '') AS tenure_desc,
+  IFNULL(e.contract_type, '') AS contract_type,
+  IFNULL(e.contract_id, '') AS contract_id,
+  IFNULL(e.contract_start, '') AS contract_start,
+  IFNULL(e.contract_end, '') AS contract_end,
+  e.tap,
+  e.a_months,
+  IFNULL(e.classroom_assignment, '') AS classroom_assignment,
+  IFNULL(e.mailstop, '') AS mailstop
+FROM position_info pi
+LEFT JOIN employee_info e
+  ON IFNULL(CAST(e.pos_number AS UNSIGNED), 0) = IFNULL(CAST(pi.pos_number AS UNSIGNED), 0)
+WHERE IFNULL(CAST(pi.pos_number AS UNSIGNED), 0) = IFNULL(CAST(? AS UNSIGNED), 0)
+  AND pi.organization = ?
+LIMIT 1;
+`;
+
+function toPositionDetails(row: PositionDetailSqlRow): PositionDetails {
+  const occupied = Boolean((row.full_name ?? '').trim() || (row.emp_number ?? '').trim());
+  return {
+    position: {
+      positionId: Number(row.position_id ?? -1),
+      posStart: row.pos_start ?? '',
+      posEnding: row.pos_ending ?? '',
+      posName: row.pos_name ?? '',
+      posNumber: String(row.pos_number ?? ''),
+      fund: row.fund ?? '',
+      purpose: row.purpose ?? '',
+      program: row.program ?? '',
+      object: row.object ?? '',
+      level: row.level ?? '',
+      costCenter: row.cost_center ?? '',
+      months: row.months ?? null,
+      administrator: row.administrator ?? '',
+      organization: row.organization ?? '',
+      calendar: row.calendar ?? '',
+      locType: row.loc_type ?? '',
+      region: row.region ?? '',
+      ss200Code: row.ss200_code ?? ''
+    },
+    accountNumber: row.account_number ?? '',
+    incumbent: occupied
+      ? {
+          fullName: row.full_name ?? '',
+          employeeNumber: row.emp_number ?? '',
+          personId: String(row.person_id ?? ''),
+          tenureCode: row.tenure_code ?? '',
+          tenureDesc: row.tenure_desc ?? '',
+          contractType: row.contract_type ?? '',
+          contractId: row.contract_id ?? '',
+          contractStart: row.contract_start ?? '',
+          contractEnd: row.contract_end ?? '',
+          tap: row.tap !== null && row.tap !== undefined ? String(row.tap) : '',
+          months: row.a_months ?? null,
+          classroom: row.classroom_assignment ?? '',
+          mailstop: row.mailstop ?? '',
+          object: row.object ?? ''
+        }
+      : null,
+    org: row.organization ?? '',
+    vacant: !occupied
+  };
+}
+
+async function getPositionDetails(posNumber: string, organization: string): Promise<PositionDetails | null> {
+  const rows = await query<PositionDetailSqlRow>(POSITION_DETAIL_SQL, [posNumber, organization]);
+  const row = rows[0];
+  return row ? toPositionDetails(row) : null;
+}
+
 type EmployeeRow = {
   person_id: string | number;
   emp_number: string | null;
@@ -104,6 +241,7 @@ type EmployeeRow = {
   e_mail: string | null;
   organization: string | null;
   pos_name: string | null;
+  pos_number: string | null;
   cost_center: string | null;
   object: string | null;
   primary_flag: string | null;
@@ -176,6 +314,7 @@ export const mysqlRepositories: Repositories = {
     }
   },
   reports: { openPositions },
+  positions: { getPositionDetails },
   // MySQL deferred: configurable report tables land here when the prod
   // migration runs. Until then, delegate to the fixture seed so the API
   // contract holds on every data source.
@@ -207,6 +346,7 @@ function buildRecord(employee: EmployeeRow, school: SchoolRow | undefined): Pers
       classroom: employee.classroom_assignment ?? '',
       months: employee.a_months ?? 0,
       position: employee.pos_name ?? '',
+      positionNumber: employee.pos_number !== null && employee.pos_number !== undefined ? String(employee.pos_number) : '',
       accountCode: '',
       tapPercent: 0,
       payGrade: '',

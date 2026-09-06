@@ -256,6 +256,23 @@ export function createApp(repositories: Repositories = fixtureRepositories) {
     }
   });
 
+  // Read-only Position Details — any authenticated staff can view a position by
+  // its 7-digit pos_number. Organization is required to scope the lookup.
+  application.get('/api/positions/:posNumber', async (request, response, next) => {
+    try {
+      const query = openPositionQuerySchema.parse(request.query);
+      const posNumber = routeId(request.params.posNumber);
+      const details = await repositories.positions.getPositionDetails(posNumber, query.organization);
+      if (!details) {
+        response.status(404).json({ error: 'POSITION_NOT_FOUND' });
+        return;
+      }
+      response.json(details);
+    } catch (error) {
+      next(error);
+    }
+  });
+
   // ---- Configurable reports (Settings page) ----
 
   application.get('/api/report-sections', async (request, response, next) => {

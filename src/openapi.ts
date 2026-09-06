@@ -109,6 +109,25 @@ export const openApiDocument = {
         }
       }
     },
+    '/positions/{posNumber}': {
+      get: {
+        tags: ['Reports'],
+        operationId: 'getPositionDetails',
+        summary: 'Fetch a single position and its incumbent',
+        parameters: [
+          { name: 'posNumber', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'organization', in: 'query', required: true, schema: { type: 'string' } }
+        ],
+        responses: {
+          '200': {
+            description: 'Position details (incumbent null when vacant)',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/PositionDetails' } } }
+          },
+          '400': { description: 'Missing organization parameter' },
+          '404': { description: 'Position not found' }
+        }
+      }
+    },
     '/report-sections': {
       get: {
         tags: ['Reports'],
@@ -553,6 +572,60 @@ export const openApiDocument = {
           organization: { type: 'string' },
           columns: { type: 'array', items: { type: 'string' } },
           rows: { type: 'array', items: { $ref: '#/components/schemas/OpenPositionRow' } }
+        }
+      },
+      PositionInfo: {
+        type: 'object',
+        required: ['positionId', 'posStart', 'posEnding', 'posName', 'posNumber'],
+        properties: {
+          positionId: { type: 'integer' },
+          posStart: { type: 'string' },
+          posEnding: { type: 'string' },
+          posName: { type: 'string' },
+          posNumber: { type: 'string' },
+          fund: { type: 'string' },
+          purpose: { type: 'string' },
+          program: { type: 'string' },
+          object: { type: 'string' },
+          level: { type: 'string' },
+          costCenter: { type: 'string' },
+          months: { type: 'number', nullable: true },
+          administrator: { type: 'string' },
+          organization: { type: 'string' },
+          calendar: { type: 'string' },
+          locType: { type: 'string' },
+          region: { type: 'string' },
+          ss200Code: { type: 'string' }
+        }
+      },
+      IncumbentSummary: {
+        type: 'object',
+        properties: {
+          fullName: { type: 'string' },
+          employeeNumber: { type: 'string' },
+          personId: { type: 'string' },
+          tenureCode: { type: 'string' },
+          tenureDesc: { type: 'string' },
+          contractType: { type: 'string' },
+          contractId: { type: 'string' },
+          contractStart: { type: 'string' },
+          contractEnd: { type: 'string' },
+          tap: { type: 'string' },
+          months: { type: 'number', nullable: true },
+          classroom: { type: 'string' },
+          mailstop: { type: 'string' },
+          object: { type: 'string' }
+        }
+      },
+      PositionDetails: {
+        type: 'object',
+        required: ['position', 'accountNumber', 'org', 'vacant'],
+        properties: {
+          position: { $ref: '#/components/schemas/PositionInfo' },
+          accountNumber: { type: 'string' },
+          incumbent: { $ref: '#/components/schemas/IncumbentSummary', nullable: true },
+          org: { type: 'string' },
+          vacant: { type: 'boolean' }
         }
       },
       ReportSection: {

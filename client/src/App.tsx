@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
-import { AlertCircle, ArrowUpRight, BarChart3, Bookmark, Building2, Check, ChevronDown, ChevronUp, FileText, GripVertical, Home, LogOut, Menu, Moon, Search, Settings, Sun, Users, X } from 'lucide-react';
-import { checkFavorites, getFavorites, getPeople, getPersonRecord, getSchools, login } from './api';
-import type { LoginSession, Person, PersonRecord, School } from './types';
+import { AlertCircle, ArrowUpRight, BarChart3, Bookmark, Building2, Check, ChevronDown, ChevronUp, FileText, GripVertical, Home, LogOut, Menu, Moon, Palette, Search, Settings, Sun, Users, X } from 'lucide-react';
+import { checkFavorites, getFavorites, getPeople, getPersonRecord, getPositionDetails, getSchools, login } from './api';
+import type { LoginSession, Person, PersonRecord, PositionDetails, School } from './types';
 import { FavoritesPage } from './FavoritesPage';
 import { ReportsPage } from './ReportsPage';
 import { SettingsPage } from './SettingsPage';
 import { DEFAULT_RECORD_LAYOUT, RECORD_SECTION_TITLES, arraysEqual, loadRecordLayout, resetRecordLayout, saveRecordLayout } from './recordLayout';
 import type { RecordSectionId } from './recordLayout';
+import { DEFAULT_SECTION_COLORS, SECTION_COLOR_OPTIONS, clearSectionColor, loadSectionColors, saveSectionColor } from './sectionColors';
 
 const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
 
@@ -14,10 +15,86 @@ function RecordField({ label, value, mono = false }: { label: string; value: Rea
   return <div className="record-field"><span>{label}</span><strong className={mono ? 'mono' : ''}>{value || 'Not provided'}</strong></div>;
 }
 
+// Proposed salary toggle — the stored value is ANNUAL, but it is displayed as a
+// monthly figure by default. Clicking the field toggles between monthly and
+// yearly (yearly = monthly × 12).
+function SalaryToggleField({ annual, view, onToggle }: { annual: number; view: 'monthly' | 'yearly'; onToggle: () => void }) {
+  const monthly = annual / 12;
+  const isMonthly = view === 'monthly';
+  const display = isMonthly ? money.format(monthly) : money.format(annual);
+  const suffix = isMonthly ? 'monthly' : 'yearly';
+  return (
+    <div
+      className="record-field salary-toggle"
+      role="button"
+      tabIndex={0}
+      aria-pressed={!isMonthly}
+      title={isMonthly ? 'Show yearly salary' : 'Show monthly salary'}
+      onClick={onToggle}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle(); } }}
+    >
+      <span>Proposed salary</span>
+      <strong>{display} <em className="salary-period">{suffix}</em></strong>
+    </div>
+  );
+}
+
+// Inline pastel color picker for a section header. Opens a small popover of
+// swatches; picking one applies it to the header and persists it via the
+// onSelect callback. The overall start color appears as a dot on the palette
+// button.
+function SectionColorPicker({ value, defaultColor, onSelect }: { value: string; defaultColor: string; onSelect: (color: string) => void }) {
+  const [open, setOpen] = useState(false);
+  function choose(color: string) {
+    onSelect(color);
+    setOpen(false);
+  }
+  return (
+    <span className="record-color-picker" onClick={(e) => e.stopPropagation()}>
+      <button
+        className={`record-color-btn ${open ? 'open' : ''}`}
+        aria-label="Change section color"
+        title="Change section color"
+        aria-expanded={open}
+        onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
+      >
+        <Palette size={13} />
+      </button>
+      {open && (
+        <span className="record-color-menu" role="listbox" aria-label="Section color">
+          {SECTION_COLOR_OPTIONS.map((option) => (
+            <button
+              key={option.id}
+              className={`record-color-swatch ${value === option.value ? 'selected' : ''}`}
+              title={option.name}
+              aria-label={option.name}
+              aria-pressed={value === option.value}
+              style={{ background: option.value }}
+              onClick={(e) => { e.stopPropagation(); choose(option.value); }}
+            />
+          ))}
+          <button
+            className="record-color-reset"
+            title={`Reset to default (${defaultColor})`}
+            aria-label="Reset to default color"
+            onClick={(e) => { e.stopPropagation(); choose(defaultColor); }}
+          >
+            Reset
+          </button>
+        </span>
+      )}
+    </span>
+  );
+}
+
 function DraggableRecordSection({
   id,
   title,
   tone = '',
+  headerColor,
+  customColor,
+  defaultColor,
+  onColorChange,
   index,
   total,
   isDragging,
@@ -33,6 +110,10 @@ function DraggableRecordSection({
   id: RecordSectionId;
   title: string;
   tone?: string;
+  headerColor: string;
+  customColor: string | null;
+  defaultColor: string;
+  onColorChange: (color: string) => void;
   index: number;
   total: number;
   isDragging: boolean;
@@ -54,10 +135,11 @@ function DraggableRecordSection({
     onDragEnd={onDragEnd}
     aria-label={`${title} section, position ${index + 1} of ${total}, draggable`}
   >
-    <h4 draggable onDragStart={onDragStart}>
+    <h4 draggable onDragStart={onDragStart} style={customColor ? { background: headerColor } : undefined}>
       <GripVertical size={14} className="record-drag-handle" aria-hidden="true" />
       <span className="record-section-title">{title}</span>
       <span className="record-section-actions">
+        <SectionColorPicker value={headerColor} defaultColor={defaultColor} onSelect={onColorChange} />
         <button className="record-move-btn" onClick={onMoveUp} disabled={index === 0} aria-label={`Move ${title} up`} title="Move up"><ChevronUp size={14} /></button>
         <button className="record-move-btn" onClick={onMoveDown} disabled={index === total - 1} aria-label={`Move ${title} down`} title="Move down"><ChevronDown size={14} /></button>
       </span>
@@ -69,20 +151,41 @@ function DraggableRecordSection({
 function EmployeeRecord({
   record,
   layout,
+  userId,
   onClose,
   onReorder,
   onMoveUp,
   onMoveDown,
+  onOpenPosition,
 }: {
   record: PersonRecord;
   layout: RecordSectionId[];
+  userId: string | null;
   onClose: () => void;
   onReorder: (from: number, to: number) => void;
   onMoveUp: (index: number) => void;
   onMoveDown: (index: number) => void;
+  onOpenPosition: (posNumber: string, organization: string) => void;
 }) {
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [dropIndex, setDropIndex] = useState<number | null>(null);
+  const [salaryView, setSalaryView] = useState<'monthly' | 'yearly'>('monthly');
+  const [sectionColors, setSectionColors] = useState<Partial<Record<RecordSectionId, string>>>(() => loadSectionColors(userId));
+
+  function handleColorChange(id: RecordSectionId, color: string) {
+    const defaultColor = DEFAULT_SECTION_COLORS[id];
+    if (color === defaultColor) {
+      setSectionColors((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      clearSectionColor(userId, id);
+    } else {
+      setSectionColors((prev) => ({ ...prev, [id]: color }));
+      saveSectionColor(userId, id, color);
+    }
+  }
 
   function handleDragStart(e: React.DragEvent, index: number) {
     setDragIndex(index);
@@ -108,8 +211,8 @@ function EmployeeRecord({
   const renderers: Record<RecordSectionId, React.ReactNode> = {
     identity: <><RecordField label="NC UID" value={record.identity.ncUid} mono /><RecordField label="Employee ID" value={record.identity.employeeNumber} mono /><RecordField label="Gender" value={record.identity.gender} /><RecordField label="Ethnicity" value={record.identity.ethnicity} /><RecordField label="Date of birth" value={record.identity.dateOfBirth} /><RecordField label="Email" value={record.identity.email} /><RecordField label="Personal email" value={record.identity.personalEmail} /></>,
     contact: <><RecordField label="Address" value={record.contact.address} /><RecordField label="City" value={record.contact.city} /><RecordField label="State / ZIP" value={`${record.contact.state} ${record.contact.zip}`} mono /><RecordField label="Phone" value={record.contact.phone} mono /></>,
-    assignment: <><RecordField label="Location" value={record.assignment.organization} /><RecordField label="Classroom" value={record.assignment.classroom} /><RecordField label="Position" value={record.assignment.position} /><RecordField label="Account" value={record.assignment.accountCode} mono /><RecordField label="Months" value={record.assignment.months} /><RecordField label="TAP" value={`${record.assignment.tapPercent.toFixed(2)}%`} /><RecordField label="Pay grade" value={record.assignment.payGrade} /><RecordField label="Group" value={record.assignment.group} /><RecordField label="Mail stop" value={record.assignment.mailStop} /><RecordField label="School type" value={record.assignment.schoolType} /><RecordField label="Supervisor" value={record.assignment.supervisor} /></>,
-    compensation: <><RecordField label="Step" value={record.compensation.step} /><RecordField label="Proposed salary" value={money.format(record.compensation.proposedSalary)} /><RecordField label="Fixed supplement" value={money.format(record.compensation.fixedSupplement)} /><RecordField label="Off scale" value={money.format(record.compensation.offScale)} /><RecordField label="Supplement" value={money.format(record.compensation.supplement)} /><RecordField label="TOS state" value={money.format(record.compensation.tosState)} /><RecordField label="TOS supplement" value={money.format(record.compensation.tosSupplement)} /><RecordField label="Teacher differential" value={money.format(record.compensation.teacherDifferential)} /></>,
+    assignment: <><RecordField label="Location" value={record.assignment.organization} /><RecordField label="Classroom" value={record.assignment.classroom} /><RecordField label="Position" value={record.assignment.positionNumber ? <button className="report-cell-link" onClick={() => onOpenPosition(record.assignment.positionNumber, record.assignment.organization)}>{(record.assignment.positionNumber.trim() ? record.assignment.positionNumber.trim() + ' - ' : '') + record.assignment.position}</button> : record.assignment.position} /><RecordField label="Account" value={record.assignment.accountCode} mono /><RecordField label="Months" value={record.assignment.months} /><RecordField label="TAP" value={`${record.assignment.tapPercent.toFixed(2)}%`} /><RecordField label="Pay grade" value={record.assignment.payGrade} /><RecordField label="Group" value={record.assignment.group} /><RecordField label="Mail stop" value={record.assignment.mailStop} /><RecordField label="School type" value={record.assignment.schoolType} /><RecordField label="Supervisor" value={record.assignment.supervisor} /></>,
+    compensation: <><RecordField label="Step" value={record.compensation.step} /><SalaryToggleField annual={record.compensation.proposedSalary} view={salaryView} onToggle={() => setSalaryView((v) => (v === 'monthly' ? 'yearly' : 'monthly'))} /><RecordField label="Fixed supplement" value={money.format(record.compensation.fixedSupplement)} /><RecordField label="Off scale" value={money.format(record.compensation.offScale)} /><RecordField label="Supplement" value={money.format(record.compensation.supplement)} /><RecordField label="TOS state" value={money.format(record.compensation.tosState)} /><RecordField label="TOS supplement" value={money.format(record.compensation.tosSupplement)} /><RecordField label="Teacher differential" value={money.format(record.compensation.teacherDifferential)} /></>,
     contract: <><RecordField label="Hire date" value={record.contract.hireDate} /><RecordField label="Continuous date" value={record.contract.continuousDate} /><RecordField label="Last changed" value={record.contract.lastChanged} /><RecordField label="Type" value={record.contract.type} /><RecordField label="Start" value={record.contract.start} /><RecordField label="End" value={record.contract.end} /><RecordField label="Renewal year" value={record.contract.renewalYear} /><RecordField label="Change type" value={record.contract.changeType} /><RecordField label="Board number" value={record.contract.boardNumber} mono /></>,
     licensure: <><RecordField label="Type" value={record.licensure.type} /><RecordField label="Renewal year" value={record.licensure.renewalYear} /><RecordField label="Expires" value={record.licensure.expires} /><div className="record-table-wrap"><table className="record-table"><thead><tr><th>Area</th><th>Description</th><th>Years</th><th>Status</th><th>Code</th></tr></thead><tbody>{record.licensure.areas.map((area) => <tr key={area.code}><td className="mono">{area.area}</td><td>{area.description}</td><td>{area.years}</td><td>{area.status}</td><td className="mono">{area.code}</td></tr>)}</tbody></table></div></>,
     service: <><RecordField label="Years of service" value={record.service.yearsOfService} /><RecordField label="Months of service" value={record.service.monthsOfService} /><RecordField label="Last updated" value={record.service.lastUpdated} /></>,
@@ -125,6 +228,10 @@ function EmployeeRecord({
       id={id}
       title={RECORD_SECTION_TITLES[id]}
       tone={tones[id] ?? ''}
+      headerColor={sectionColors[id] ?? DEFAULT_SECTION_COLORS[id]}
+      customColor={sectionColors[id] ?? null}
+      defaultColor={DEFAULT_SECTION_COLORS[id]}
+      onColorChange={(color) => handleColorChange(id, color)}
       index={index}
       total={layout.length}
       isDragging={dragIndex === index}
@@ -136,6 +243,61 @@ function EmployeeRecord({
       onMoveUp={() => onMoveUp(index)}
       onMoveDown={() => onMoveDown(index)}
     >{renderers[id]}</DraggableRecordSection>)}
+  </div>;
+}
+
+// Read-only Position Details drawer — non-draggable, mirrors the field layout
+// of the employee record but never reorders.
+function PositionDetailView({ details, onClose }: { details: PositionDetails; onClose: () => void }) {
+  const { position, incumbent, accountNumber, org, vacant } = details;
+  return <div className="employee-record">
+    <div className="record-title">
+      <div>
+        <p className="eyebrow">Position details</p>
+        <h3>{position.posName || `Position ${position.posNumber}`}</h3>
+        <span className={`record-status ${vacant ? 'record-status--vacant' : 'record-status--filled'}`}>
+          <span className="status-dot" />{vacant ? 'Vacant' : 'Filled'}
+        </span>
+      </div>
+      <div className="record-title-actions"><button className="icon-button" onClick={onClose} aria-label="Close position details" title="Close position details"><X size={17} /></button></div>
+    </div>
+    <div className="record-grid">
+      <RecordField label="Position number" value={position.posNumber} mono />
+      <RecordField label="Account" value={accountNumber} mono />
+      <RecordField label="Organization" value={org} />
+      <RecordField label="Pos. starting" value={position.posStart} />
+      <RecordField label="Pos. ending" value={position.posEnding} />
+      <RecordField label="Months" value={position.months} />
+      <RecordField label="Fund" value={position.fund} mono />
+      <RecordField label="Purpose" value={position.purpose} mono />
+      <RecordField label="Program" value={position.program} mono />
+      <RecordField label="Object" value={position.object} mono />
+      <RecordField label="Level" value={position.level} mono />
+      <RecordField label="Cost center" value={position.costCenter} mono />
+      <RecordField label="Administrator" value={position.administrator} />
+      <RecordField label="Region" value={position.region} />
+      <RecordField label="Location type" value={position.locType} />
+      <RecordField label="SS200 code" value={position.ss200Code} />
+      <RecordField label="Calendar" value={position.calendar} />
+    </div>
+    <h4 className="record-section-title">Incumbent</h4>
+    {incumbent ? (
+      <div className="record-grid">
+        <RecordField label="Name" value={incumbent.fullName} />
+        <RecordField label="Employee no." value={incumbent.employeeNumber} mono />
+        <RecordField label="Tenure code" value={`${incumbent.tenureCode}${incumbent.tenureDesc ? ` — ${incumbent.tenureDesc}` : ''}`} />
+        <RecordField label="Contract type" value={incumbent.contractType} />
+        <RecordField label="Contract ID" value={incumbent.contractId} mono />
+        <RecordField label="Contract start" value={incumbent.contractStart} />
+        <RecordField label="Contract end" value={incumbent.contractEnd} />
+        <RecordField label="TAP" value={incumbent.tap} />
+        <RecordField label="Months" value={incumbent.months} />
+        <RecordField label="Classroom" value={incumbent.classroom} />
+        <RecordField label="Mail stop" value={incumbent.mailstop} mono />
+      </div>
+    ) : (
+      <div className="detail-placeholder"><Users size={24} /><p>No incumbent is assigned to this position.</p></div>
+    )}
   </div>;
 }
 
@@ -173,6 +335,9 @@ export function App() {
   const [personRecord, setPersonRecord] = useState<PersonRecord | null>(null);
   const [recordLoading, setRecordLoading] = useState(false);
   const [recordError, setRecordError] = useState('');
+  const [positionDetails, setPositionDetails] = useState<PositionDetails | null>(null);
+  const [positionLoading, setPositionLoading] = useState(false);
+  const [positionError, setPositionError] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
@@ -382,6 +547,8 @@ export function App() {
   async function openRecordByEmployeeNumber(employeeNumber: string) {
     const trimmed = employeeNumber.trim();
     if (!trimmed) return;
+    setPositionDetails(null);
+    setPositionError('');
     let person = people.find((candidate) => candidate.employeeNumber === trimmed);
     if (!person) {
       try {
@@ -405,11 +572,32 @@ export function App() {
     await selectPerson(person);
   }
 
-  const drawerOpen = Boolean(selectedPerson || recordLoading || recordError || personRecord);
+  async function openPositionByNumber(posNumber: string, organization: string) {
+    const trimmed = posNumber.trim();
+    if (!trimmed) return;
+    setSelectedPerson(null);
+    setPersonRecord(null);
+    setRecordError('');
+    setPositionDetails(null);
+    setPositionError('');
+    setPositionLoading(true);
+    try {
+      setPositionDetails(await getPositionDetails(organization, trimmed));
+    } catch {
+      setPositionError('The position details could not be loaded.');
+    } finally {
+      setPositionLoading(false);
+    }
+  }
+
+  const drawerOpen = Boolean(selectedPerson || recordLoading || recordError || personRecord || positionDetails || positionLoading || positionError);
   function closeRecord() {
     setSelectedPerson(null);
     setPersonRecord(null);
     setRecordError('');
+    setPositionDetails(null);
+    setPositionLoading(false);
+    setPositionError('');
   }
 
   useEffect(() => {
@@ -468,7 +656,7 @@ export function App() {
         </div>
       </header>
 
-      {activeView === 'reports' ? <ReportsPage schools={schools} session={session} onManage={isAdmin ? () => navigate('settings') : undefined} onOpenRecord={openRecordByEmployeeNumber} favoritesNav={favoritesReportNav} onFavoritesNavConsumed={() => setFavoritesReportNav(null)} /> : activeView === 'favorites' ? <FavoritesPage session={session} schools={schools} onOpenRecord={openRecordByEmployeeNumber} onOpenReport={handleOpenFavoriteReport} /> : activeView === 'settings' ? (isAdmin && session ? <SettingsPage session={session} schools={schools} /> : <section className="reports-page"><div className="notice error"><AlertCircle size={18} /><span>Access denied. Admin access is required.</span></div></section>) : <>
+      {activeView === 'reports' ? <ReportsPage schools={schools} session={session} onManage={isAdmin ? () => navigate('settings') : undefined} onOpenRecord={openRecordByEmployeeNumber} onOpenPosition={openPositionByNumber} favoritesNav={favoritesReportNav} onFavoritesNavConsumed={() => setFavoritesReportNav(null)} /> : activeView === 'favorites' ? <FavoritesPage session={session} schools={schools} onOpenRecord={openRecordByEmployeeNumber} onOpenReport={handleOpenFavoriteReport} /> : activeView === 'settings' ? (isAdmin && session ? <SettingsPage session={session} schools={schools} /> : <section className="reports-page"><div className="notice error"><AlertCircle size={18} /><span>Access denied. Admin access is required.</span></div></section>) : <>
       <section className="hero-band">
         <div>
           <p className="eyebrow">People directory</p>
@@ -528,9 +716,11 @@ export function App() {
       </section>
       </>}
       {drawerOpen && <>
-        <button className="record-drawer-scrim" aria-label="Close employee record" onClick={closeRecord} />
-        <aside className="record-drawer" role="dialog" aria-modal="true" aria-label="Employee record">
-          {recordLoading ? <div className="empty-state"><span className="loader" />Loading employee record</div> : recordError ? <div className="empty-state"><AlertCircle size={26} /><p>{recordError}</p></div> : personRecord ? <>
+        <button className="record-drawer-scrim" aria-label="Close drawer" onClick={closeRecord} />
+        <aside className="record-drawer" role="dialog" aria-modal="true" aria-label={positionDetails || positionLoading || positionError ? 'Position details' : 'Employee record'}>
+          {positionLoading ? <div className="empty-state"><span className="loader" />Loading position details</div> : positionError ? <div className="empty-state"><AlertCircle size={26} /><p>{positionError}</p></div> : positionDetails ? (
+            <PositionDetailView details={positionDetails} onClose={closeRecord} />
+          ) : recordLoading ? <div className="empty-state"><span className="loader" />Loading employee record</div> : recordError ? <div className="empty-state"><AlertCircle size={26} /><p>{recordError}</p></div> : personRecord ? <>
             <div className="record-layout-toolbar">
               <span className="record-layout-hint">Drag sections to reorder</span>
               <span className="record-layout-actions">
@@ -540,7 +730,7 @@ export function App() {
             </div>
             {layoutNotice && <div className="notice success" role="status" aria-live="polite">{layoutNotice}</div>}
             <div aria-live="polite" className="sr-only">{layoutNotice}</div>
-            <EmployeeRecord record={personRecord} layout={recordLayout} onClose={closeRecord} onReorder={reorderRecordSection} onMoveUp={moveRecordSectionUp} onMoveDown={moveRecordSectionDown} />
+            <EmployeeRecord record={personRecord} layout={recordLayout} userId={session?.user.id ?? null} onClose={closeRecord} onReorder={reorderRecordSection} onMoveUp={moveRecordSectionUp} onMoveDown={moveRecordSectionDown} onOpenPosition={openPositionByNumber} />
           </> : <div className="detail-placeholder"><Users size={28} /><h3>Select a person</h3><p>Choose a record from the directory to inspect the complete employee report.</p></div>}
         </aside>
       </>}

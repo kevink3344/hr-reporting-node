@@ -129,15 +129,6 @@ const positions = people.map((p, idx) => ({
 }));
 const posByNumber = new Map(positions.map((p) => [p.number, p]));
 
-sql('-- position_info');
-for (let i = 0; i < positions.length; i++) {
-  const p = positions[i];
-  const posStart = posStartFor(i, p.id);
-  sql(`INSERT INTO position_info (position_id, pos_number, pos_name, organization, months, fund, object, cost_center, level, administrator, calendar, loc_type, region, ss200_code, pos_start, pos_ending) VALUES (` +
-    `${p.id}, ${p.number}, ${esc(p.name)}, ${esc(p.org)}, ${p.months}, ${esc('01')}, ${esc('120')}, ${esc('0901')}, ${esc('LEVEL')}, ${esc('Principal ' + p.org.toUpperCase())}, ${esc('Standard')}, ${esc('S')}, ${esc('Central')}, ${esc('SS200')}, ${esc(posStart)}, ${esc('0000-00-00')});`);
-}
-
-sql('-- employee_info');
 // Mapping per docs/columns/mapping.md: contract_type <-> contract_desc (tenure_desc)
 const contractMapping = [
   { type: 'T', desc: 'Terminating' },
@@ -152,6 +143,56 @@ const safeMapping = [
   { type: '2Y', desc: 'Two Year Contract' },
   { type: 'C', desc: 'Career Contract' }
 ] as const;
+// Same selection logic as the employee_info loop (non-matching demo rows use safeMapping).
+function contractTypeFor(id: number): string {
+  const isNonMatchingDemo = id >= 10036;
+  const mapping = isNonMatchingDemo
+    ? safeMapping[id % safeMapping.length]
+    : contractMapping[id % contractMapping.length];
+  return mapping.type;
+}
+// Position Details "Pos. ending" cleanup: derive POS. ENDING from the incumbent's
+// CONTRACT_ID / contract_type code. Per user spec: "has a 1" (1Y) -> 2027, "has a 2"
+// (2Y) -> 2028; Career (C) -> 2030; every other code (T, NC, 4E) -> 2029.
+function posEndingFor(contractType: string): string {
+  switch (contractType) {
+    case '1Y': return '2027-06-30';
+    case '2Y': return '2028-06-30';
+    case 'C': return '2030-06-30';
+    default: return '2029-06-30'; // T, NC, 4E
+  }
+}
+
+sql('-- position_info');
+for (let i = 0; i < positions.length; i++) {
+  const p = positions[i];
+  const posStart = posStartFor(i, p.id);
+  const person = people[i];
+  const contractType = contractTypeFor(person.id);
+  const posEnding = posEndingFor(contractType);
+  sql(`INSERT INTO position_info (position_id, pos_number, pos_name, organization, months, fund, object, cost_center, level, administrator, calendar, loc_type, region, ss200_code, pos_start, pos_ending) VALUES (` +
+    `${p.id}, ${p.number}, ${esc(p.name)}, ${esc(p.org)}, ${p.months}, ${esc('01')}, ${esc('120')}, ${esc('0901')}, ${esc('LEVEL')}, ${esc('Principal ' + p.org.toUpperCase())}, ${esc('Standard')}, ${esc('S')}, ${esc('Central')}, ${esc('SS200')}, ${esc(posStart)}, ${esc(posEnding)});`);
+}
+
+// ----- position_info: VACANT positions (no matching employee_info row) -----
+// These exercise the Position Details drawer's vacant path — a position that
+// exists in position_info but has no incumbent in employee_info.
+sql('-- position_info: vacant positions');
+const vacantPositions = [
+  { id: 2001, number: 3180301, name: 'Teacher', org: 'Test Oak Elementary', months: 10 },
+  { id: 2002, number: 3180302, name: 'Assistant Principal', org: 'Test Maple Middle', months: 11 },
+  { id: 2003, number: 3180303, name: 'Counselor', org: 'Test River High', months: 11 },
+  { id: 2004, number: 3180304, name: 'Teacher', org: 'Test Cedar Elementary', months: 10 },
+  { id: 2005, number: 3180305, name: 'HR Specialist', org: 'Test Central Office', months: 12 }
+];
+for (let i = 0; i < vacantPositions.length; i++) {
+  const p = vacantPositions[i];
+  const posStart = posStartFor(i + positions.length, p.id);
+  sql(`INSERT INTO position_info (position_id, pos_number, pos_name, organization, months, fund, object, cost_center, level, administrator, calendar, loc_type, region, ss200_code, pos_start, pos_ending) VALUES (` +
+    `${p.id}, ${p.number}, ${esc(p.name)}, ${esc(p.org)}, ${p.months}, ${esc('01')}, ${esc('120')}, ${esc('0901')}, ${esc('LEVEL')}, ${esc('Principal ' + p.org.toUpperCase())}, ${esc('Standard')}, ${esc('S')}, ${esc('Central')}, ${esc('SS200')}, ${esc(posStart)}, ${esc('0000-00-00')});`);
+}
+
+sql('-- employee_info');
 const contractTapIds = new Set([10001, 10002, 10003, 10004, 10005, 10016, 10020, 10036, 10037, 10038, 10039, 10040, 10041, 10042, 10043, 10044, 10045]);
 const contractCodes = ['2027', '2028', '2029', '2030', '3000', '9999'] as const;
 const safeCodes = ['2028', '2029', '2030', '3000', '9999'] as const;
@@ -172,7 +213,9 @@ for (const p of people) {
   const mapping = isNonMatchingDemo ? safeMapping[p.id % safeMapping.length] : contractMapping[p.id % contractMapping.length];
   const tenureDescVal = mapping.desc;
   const contractTypeVal = mapping.type;
-  const contractIdValue = isContractTap ? esc(contractTypeVal) : 'NULL';
+  // contract_id always carries the contract type code so the Staff Planning
+  // report's contract_id column is never blank for a filled position.
+  const contractIdValue = esc(contractTypeVal);
   const contractTypeColVal = esc(contractTypeVal);
   const tenureCodeVal = isNonMatchingDemo ? safeCodes[p.id % safeCodes.length] : contractCodes[p.id % contractCodes.length];
   const contractEndValue = esc(p.id === 10016 || p.id === 10020 ? '2028-06-30' : '2027-06-30');
@@ -193,7 +236,7 @@ for (const p of people) {
     `${esc('S')}, ${esc('Employee')}, ${esc('Central')}, ${esc('Principal ' + p.org.toUpperCase())}, ${esc('Standard')}, ` +
     `${esc('Monthly')}, ${step}, ${salary}, 0, ${esc('N')}, 0, 0, 40, ` +
     `${p.id % 3 === 0 ? 1500 : 0}, ${p.id % 4 === 0 ? 1000 : 0}, ${esc(hireDate)}, ${esc(hireDate)}, ${renewalStart}, ${esc('2026-08-31')}, ${contractTypeColVal}, ${contractIdValue}, ` +
-    `${esc('2026-08-01')}, ${contractEndValue}, ${esc('2026-07-01')}, ${esc('2027-06-30')}, ${esc('Annual update')}, ${esc('BOARD-' + p.id)}, ${esc(p.id % 2 === 0 ? 'Regular' : 'Standard')}, ` +
+    `${esc('2026-08-01')}, ${contractEndValue}, ${esc('2026-07-01')}, ${esc('2027-06-30')}, ${esc('Annual update')}, ${esc('BOARD-' + p.id)}, ${esc('Regular')}, ` +
     `${esc('00025')}, ${esc('2029-06-30')}, ${esc('2030-06-30')}, ${tenure}, ${(p.id % 9) + 1});`);
 }
 
@@ -209,14 +252,47 @@ sql('-- cert_info');
 for (const p of people) {
   const exp = 2028 + (p.id % 4);
   sql(`INSERT INTO cert_info (person_id, socsec, cert_type_code, certification_type, information_as_of, last_cert_issued, cert_effect, cert_expiration, renewal_start, renewal_end) VALUES (` +
-    `${p.id}, ${esc('000-00-' + String(p.id).slice(-3))}, ${esc('REG')}, ${esc(p.id % 2 === 0 ? 'Regular' : 'Standard')}, ${esc('2026-08-31')}, ${esc('2025-07-01')}, ${esc('2025-07-01')}, ${esc(`${exp}-06-30`)}, ${esc('2026-07-01')}, ${esc(`${exp}-06-30`)});`);
+    `${p.id}, ${esc('000-00-' + String(p.id).slice(-3))}, ${esc('REG')}, ${esc('Regular')}, ${esc('2026-08-31')}, ${esc('2025-07-01')}, ${esc('2025-07-01')}, ${esc(`${exp}-06-30`)}, ${esc('2026-07-01')}, ${esc(`${exp}-06-30`)});`);
 }
 
 // ----- cert_area (person_id TEXT) -----
+// NCLB values sourced from docs/columns/col-values.md (the full descriptive text).
+const nclbValues = [
+  '82 - Highly Qualified - NC HOUSSE standard',
+  '84 - Highly Qualified - masters level licensure or above',
+  '86 - Highly Qualified - Other State licensing test(s)',
+  '88 - Highly Qualified - coursework = undergrad. major',
+  '87 - Highly Qualified - NC Licensing test(s)',
+  '97 - Highly Qualified not determined',
+  '98 - Not Applicable for Non-Core Academic Areas',
+  '99 - Not Highly Qualified'
+] as const;
+
+// Certification area catalog (real DPI area codes + descriptions).
+// A person may hold MULTIPLE certifications, so each person gets a
+// deterministic 1–3 area rows (some single-area, some multi-area).
+const certAreaCatalog = [
+  { area: '00011', desc: 'School Administrator-Superintendent' },
+  { area: '00012', desc: 'School Administrator-Principal' },
+  { area: '00025', desc: 'Elementary Grades K-6' },
+  { area: '00113', desc: 'Curriculum Instructional Specialist' },
+  { area: '00400', desc: 'Social Studies 9-12' },
+  { area: '78180', desc: 'Language Arts 6-9' },
+  { area: '78300', desc: 'Science 6-9' },
+  { area: '78400', desc: 'Social Studies 6-9' }
+] as const;
+
 sql('-- cert_area');
 for (const p of people) {
-  sql(`INSERT INTO cert_area (person_id, socsec, area, area_description, years, effective, status, basis, class, start_date, NCLB) VALUES (` +
-    `${esc(String(p.id))}, ${esc('000-00-' + String(p.id).slice(-3))}, ${esc('00025')}, ${esc('Elementary Grades K-6')}, ${(p.id % 20) + 1}, ${esc('2026-08-01')}, ${esc('04')}, ${esc('02')}, ${esc('CLASS')}, ${esc('2019-08-15')}, ${esc('Yes')});`);
+  const startIndex = p.id % certAreaCatalog.length;
+  const areaCount = 1 + (p.id % 3); // 1..3 areas per person (deterministic)
+  for (let k = 0; k < areaCount; k++) {
+    const entry = certAreaCatalog[(startIndex + k) % certAreaCatalog.length];
+    const nclb = nclbValues[(p.id + k) % nclbValues.length];
+    const years = (p.id % 30) + k + 1;
+    sql(`INSERT INTO cert_area (person_id, socsec, area, area_description, years, effective, status, basis, class, start_date, NCLB) VALUES (` +
+      `${esc(String(p.id))}, ${esc('000-00-' + String(p.id).slice(-3))}, ${esc(entry.area)}, ${esc(entry.desc)}, ${years}, ${esc('2026-08-01')}, ${esc('04')}, ${esc('02')}, ${esc('CLASS')}, ${esc('2019-08-15')}, ${esc(nclb)});`);
+  }
 }
 
 // ----- address (person_id TEXT) -----

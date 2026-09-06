@@ -83,12 +83,14 @@ function GenericReportView({
   result,
   session,
   onBack,
-  onOpenRecord
+  onOpenRecord,
+  onOpenPosition
 }: {
   result: GenericReportRun;
   session: LoginSession | null;
   onBack: () => void;
   onOpenRecord?: (employeeNumber: string) => void;
+  onOpenPosition?: (posNumber: string, organization: string) => void;
 }) {
   const declaredKey = (result as unknown as { report: { rowKeyColumn?: string | null } }).report.rowKeyColumn ?? null;
   const [views, setViews] = useState<ReportView[]>([]);
@@ -233,6 +235,26 @@ function GenericReportView({
     const nameCol = displayColumns.find((c) => c.toLowerCase().includes('name')) ?? displayColumns[0];
     if (nameCol && row[nameCol] !== undefined) return String(row[nameCol] ?? '').trim();
     return getEmpNumber(row) || 'Unknown';
+  }
+
+  // A column is a "position" column when it carries a pos_number / number /
+  // position id we can deep-link into the Position Details drawer.
+  function getPosNumber(row: Record<string, unknown>): string {
+    const raw = row['pos_number'] ?? row['posNumber'] ?? row['position_number'] ?? row['position_id'] ?? row['positionId'] ?? (() => {
+      const k = Object.keys(row).find((c) => c.toLowerCase().replace(/[^a-z0-9]/g, '') === 'posnumber' || c.toLowerCase().replace(/[^a-z0-9]/g, '') === 'positionnumber');
+      return k ? row[k] : '';
+    })();
+    return String(raw ?? '').trim();
+  }
+
+  function isPositionColumn(column: string): boolean {
+    const norm = column.toLowerCase().replace(/[^a-z0-9]/g, '');
+    return norm === 'posnumber' || norm === 'positionnumber' || norm === 'number' || norm === 'positionid' || norm === 'position';
+  }
+
+  function isPersonColumn(column: string): boolean {
+    const norm = column.toLowerCase().replace(/[^a-z0-9]/g, '');
+    return norm === 'fullname' || norm === 'name' || norm === 'person' || norm === 'employeename' || norm === 'empname' || norm === 'employee' || norm === 'empnumber' || norm === 'employeenumber';
   }
 
   useEffect(() => {
@@ -797,13 +819,47 @@ function GenericReportView({
                       ) : (
                         <td className="report-pin-cell" aria-hidden="true" />
                       )}
-                      {displayColumns.map((column) => (
-                        <td key={column} data-label={column}>
-                          <span style={column === nameCol ? { display: 'inline-flex', alignItems: 'center', gap: 6 } : undefined}>
-                            {record[column] === null || record[column] === undefined ? '' : String(record[column])}
-                          </span>
-                        </td>
-                      ))}
+                      {displayColumns.map((column) => {
+                        const cellValue = record[column] === null || record[column] === undefined ? '' : String(record[column]);
+                        const posNo = getPosNumber(record);
+                        const isPosition = isPositionColumn(column) && Boolean(posNo) && Boolean(onOpenPosition);
+                        const isPerson = isPersonColumn(column) && Boolean(empNo) && Boolean(onOpenRecord);
+                        if (isPosition) {
+                          return (
+                            <td key={column} data-label={column}>
+                              <button
+                                type="button"
+                                className="report-cell-link"
+                                onClick={(e) => { e.stopPropagation(); onOpenPosition!(posNo, result.organization); }}
+                                title={`Open position ${posNo}`}
+                              >
+                                {cellValue}
+                              </button>
+                            </td>
+                          );
+                        }
+                        if (isPerson) {
+                          return (
+                            <td key={column} data-label={column}>
+                              <button
+                                type="button"
+                                className="report-cell-link"
+                                onClick={(e) => { e.stopPropagation(); onOpenRecord!(empNo); }}
+                                title={`Open employee record for ${empNo}`}
+                              >
+                                {cellValue}
+                              </button>
+                            </td>
+                          );
+                        }
+                        return (
+                          <td key={column} data-label={column}>
+                            <span style={column === nameCol ? { display: 'inline-flex', alignItems: 'center', gap: 6 } : undefined}>
+                              {cellValue}
+                            </span>
+                          </td>
+                        );
+                      })}
                     </tr>
                     {sub && sub.rows.length > 0 && (
                       <tr className="report-subreport-row">
@@ -961,7 +1017,7 @@ function GenericReportView({
   </div>;
 }
 
-export function ReportsPage({ schools, session, onManage, onOpenRecord, favoritesNav, onFavoritesNavConsumed }: { schools: School[]; session: LoginSession | null; onManage?: () => void; onOpenRecord?: (employeeNumber: string) => void; favoritesNav?: { reportId: string; organization: string } | null; onFavoritesNavConsumed?: () => void }) {
+export function ReportsPage({ schools, session, onManage, onOpenRecord, onOpenPosition, favoritesNav, onFavoritesNavConsumed }: { schools: School[]; session: LoginSession | null; onManage?: () => void; onOpenRecord?: (employeeNumber: string) => void; onOpenPosition?: (posNumber: string, organization: string) => void; favoritesNav?: { reportId: string; organization: string } | null; onFavoritesNavConsumed?: () => void }) {
   const [schoolId, setSchoolId] = useState('');
   const [sections, setSections] = useState<ReportSection[]>([]);
   const [reports, setReports] = useState<ReportDefinition[]>([]);
@@ -1073,7 +1129,7 @@ export function ReportsPage({ schools, session, onManage, onOpenRecord, favorite
   if (activeReport) {
     if (reportLoading) return <section className="reports-page"><div className="empty-state"><span className="loader" />Loading {activeReport.title}</div></section>;
     if (reportError) return <section className="reports-page"><div className="notice error"><AlertCircle size={18} /><span>{reportError}</span></div><button className="back-button" onClick={backToCatalog}><ArrowLeft size={17} />All reports</button></section>;
-    if (result) return <section className="reports-page"><GenericReportView result={result} session={session} onBack={backToCatalog} onOpenRecord={onOpenRecord} /></section>;
+    if (result) return <section className="reports-page"><GenericReportView result={result} session={session} onBack={backToCatalog} onOpenRecord={onOpenRecord} onOpenPosition={onOpenPosition} /></section>;
     return <section className="reports-page"><div className="empty-state"><AlertCircle size={26} /><p>Select a school to run the report.</p></div><button className="back-button" onClick={backToCatalog}><ArrowLeft size={17} />All reports</button></section>;
   }
 

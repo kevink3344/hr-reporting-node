@@ -53,6 +53,7 @@ export type PersonRecord = {
     classroom: string;
     months: number;
     position: string;
+    positionNumber: string;
     accountCode: string;
     tapPercent: number;
     payGrade: string;
@@ -97,6 +98,58 @@ export type OpenPositionRow = {
   tap: string;
   degree: string;
   nbptsExpire: string;
+};
+
+// A single position (position_info row), the source of truth for the role
+// itself. Mirrors the position_info table plus the derived account code.
+export type PositionInfo = {
+  positionId: number;
+  posStart: string;
+  posEnding: string;
+  posName: string;
+  posNumber: string;
+  fund: string;
+  purpose: string;
+  program: string;
+  object: string;
+  level: string;
+  costCenter: string;
+  months: number | null;
+  administrator: string;
+  organization: string;
+  calendar: string;
+  locType: string;
+  region: string;
+  ss200Code: string;
+};
+
+// The person currently occupying a position (joined from employee_info).
+// Empty fields for vacant positions.
+export type IncumbentSummary = {
+  fullName: string;
+  employeeNumber: string;
+  personId: string;
+  tenureCode: string;
+  tenureDesc: string;
+  contractType: string;
+  contractId: string;
+  contractStart: string;
+  contractEnd: string;
+  tap: string;
+  months: number | null;
+  classroom: string;
+  mailstop: string;
+  object: string;
+};
+
+// Full Position Details drawer payload: the position, its account code, and
+// the incumbent (null when the seat is vacant).
+export type PositionDetails = {
+  position: PositionInfo;
+  accountNumber: string;
+  incumbent: IncumbentSummary | null;
+  org: string;
+  vacant: boolean;
 };
 
 // Admin-configurable report sections + report definitions (Settings page).

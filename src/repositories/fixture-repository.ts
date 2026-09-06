@@ -6,6 +6,7 @@ import type {
   Person,
   PersonFavorite,
   PersonRecord,
+  PositionDetails,
   ReportDefinition,
   ReportSection,
   ReportView,
@@ -75,6 +76,68 @@ const fixtureOpenPositions: OpenPositionRow[] = [
 
 async function openPositions(organization: string): Promise<OpenPositionRow[]> {
   return fixtureOpenPositions.filter((row) => row.organization === organization);
+}
+
+// Build a PositionDetails payload from a synthetic open-position row. The
+// fixture only carries a subset of position_info columns, so the remaining
+// fields default to '' (matching the live schema shape for offline parity).
+function toPositionDetailsFromRow(row: OpenPositionRow): PositionDetails {
+  const occupied = Boolean(row.fullName.trim() || row.employeeNumber.trim());
+  const segments = row.accountNumber ? row.accountNumber.split('-') : [];
+  const [fund = '', purpose = '', program = '', object = '', level = '', costCenter = ''] = segments;
+  // Fixture positions use 4-digit posNumbers ('1001'..'1004'); derive a stable
+  // positionId when possible (the live DB uses an INTEGER surrogate key).
+  const positionId = Number.isNaN(Number(row.posNumber)) ? -1 : Number(row.posNumber);
+  return {
+    position: {
+      positionId,
+      posStart: row.posStart,
+      posEnding: row.posEnding,
+      posName: row.posName,
+      posNumber: row.posNumber,
+      fund,
+      purpose,
+      program,
+      object,
+      level,
+      costCenter,
+      months: row.monthsAvailable,
+      administrator: '',
+      organization: row.organization,
+      calendar: '',
+      locType: '',
+      region: '',
+      ss200Code: ''
+    },
+    accountNumber: row.accountNumber,
+    incumbent: occupied
+      ? {
+          fullName: row.fullName,
+          employeeNumber: row.employeeNumber,
+          personId: row.employeeNumber,
+          tenureCode: row.tenureCode,
+          tenureDesc: '',
+          contractType: row.contractId,
+          contractId: row.contractId,
+          contractStart: '',
+          contractEnd: row.contractEnd,
+          tap: row.tap,
+          months: row.monthsUsed,
+          classroom: row.classroom,
+          mailstop: row.mailstop,
+          object
+        }
+      : null,
+    org: row.organization,
+    vacant: !occupied
+  };
+}
+
+async function getPositionDetails(posNumber: string, organization: string): Promise<PositionDetails | null> {
+  const row = fixtureOpenPositions.find(
+    (candidate) => candidate.posNumber === posNumber && candidate.organization === organization
+  );
+  return row ? toPositionDetailsFromRow(row) : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -215,6 +278,7 @@ export const fixtureRepositories: Repositories = {
     }
   },
   reports: { openPositions },
+  positions: { getPositionDetails },
   reportSections: {
     async list(includeInactive = false) {
       const sections = (includeInactive ? fixtureSections : fixtureSections.filter((section) => section.isActive))
