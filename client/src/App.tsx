@@ -1,13 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
-import { AlertCircle, ArrowUpRight, BarChart3, Bookmark, Building2, Check, ChevronDown, ChevronUp, FileText, GripVertical, Home, LogOut, Menu, Moon, Palette, Search, Settings, Sun, Users, X } from 'lucide-react';
+import { AlertCircle, ArrowUpRight, BarChart3, Bookmark, Building2, Check, ChevronDown, ChevronUp, FileText, GripVertical, Home, LogOut, Menu, Moon, Palette, Search, Settings2, SlidersHorizontal, Sun, Users, X } from 'lucide-react';
 import { checkFavorites, getFavorites, getPeople, getPersonRecord, getPositionDetails, getSchools, login } from './api';
 import type { LoginSession, Person, PersonRecord, PositionDetails, School } from './types';
 import { FavoritesPage } from './FavoritesPage';
 import { ReportsPage } from './ReportsPage';
 import { SettingsPage } from './SettingsPage';
+import { UserSettingsPage } from './UserSettingsPage';
 import { DEFAULT_RECORD_LAYOUT, RECORD_SECTION_TITLES, arraysEqual, loadRecordLayout, resetRecordLayout, saveRecordLayout } from './recordLayout';
 import type { RecordSectionId } from './recordLayout';
 import { DEFAULT_SECTION_COLORS, SECTION_COLOR_OPTIONS, clearSectionColor, loadSectionColors, saveSectionColor } from './sectionColors';
+import { loadHomePage, saveHomePage } from './homePage';
+import type { HomePage } from './homePage';
 
 const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
 
@@ -248,7 +251,7 @@ function EmployeeRecord({
 
 // Read-only Position Details drawer — non-draggable, mirrors the field layout
 // of the employee record but never reorders.
-function PositionDetailView({ details, onClose }: { details: PositionDetails; onClose: () => void }) {
+function PositionDetailView({ details, onClose, onOpenRecord }: { details: PositionDetails; onClose: () => void; onOpenRecord: (employeeNumber: string) => void }) {
   const { position, incumbent, accountNumber, org, vacant } = details;
   return <div className="employee-record">
     <div className="record-title">
@@ -283,8 +286,8 @@ function PositionDetailView({ details, onClose }: { details: PositionDetails; on
     <h4 className="record-section-title">Incumbent</h4>
     {incumbent ? (
       <div className="record-grid">
-        <RecordField label="Name" value={incumbent.fullName} />
-        <RecordField label="Employee no." value={incumbent.employeeNumber} mono />
+        <RecordField label="Name" value={<button className="report-cell-link" onClick={() => onOpenRecord(incumbent.employeeNumber)}>{incumbent.fullName}</button>} />
+        <RecordField label="Employee no." value={<button className="report-cell-link" onClick={() => onOpenRecord(incumbent.employeeNumber)}>{incumbent.employeeNumber}</button>} mono />
         <RecordField label="Tenure code" value={`${incumbent.tenureCode}${incumbent.tenureDesc ? ` — ${incumbent.tenureDesc}` : ''}`} />
         <RecordField label="Contract type" value={incumbent.contractType} />
         <RecordField label="Contract ID" value={incumbent.contractId} mono />
@@ -342,6 +345,8 @@ export function App() {
   const [error, setError] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
   const [activeView, setActiveView] = useState<'home' | 'reports' | 'favorites' | 'settings'>('home');
+  const [homePage, setHomePage] = useState<HomePage>('home');
+  const [userSettingsOpen, setUserSettingsOpen] = useState(false);
   const [favoritesCount, setFavoritesCount] = useState(0);
   const isAdmin = session?.user.roles.includes('hr_admin') ?? false;
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
@@ -362,6 +367,23 @@ export function App() {
     setRecordLayout(next);
     savedLayoutRef.current = next;
   }, [session?.user.id]);
+
+  // On user change (login / auto-login), restore their saved home page and land there.
+  const sessionUserId = session?.user.id ?? null;
+  useEffect(() => {
+    const page = sessionUserId ? loadHomePage(sessionUserId) : 'home';
+    setHomePage(page);
+    if (page === 'reports' || page === 'favorites') {
+      setActiveView(page);
+    } else {
+      setActiveView('home');
+    }
+  }, [sessionUserId]);
+
+  function changeHomePage(page: HomePage) {
+    setHomePage(page);
+    if (session) saveHomePage(session.user.id, page);
+  }
 
   // Auto-login: if user previously checked "Stay signed in", restore session without showing login form.
   useEffect(() => {
@@ -637,7 +659,7 @@ export function App() {
       {menuOpen && <button className="nav-scrim" aria-label="Close navigation" onClick={() => setMenuOpen(false)} />}
       <aside className={`side-navigation ${menuOpen ? 'open' : ''}`} aria-label="Main navigation">
         <div className="side-navigation-heading"><span className="brand-mark"><FileText size={18} /></span><strong>HR Reporting</strong><button className="icon-button" onClick={() => setMenuOpen(false)} aria-label="Close navigation" title="Close navigation"><X size={17} /></button></div>
-        <nav><button className={activeView === 'home' ? 'nav-item active' : 'nav-item'} onClick={() => navigate('home')}><Home size={18} /><span>Home</span></button><button className={activeView === 'reports' ? 'nav-item active' : 'nav-item'} onClick={() => navigate('reports')}><BarChart3 size={18} /><span>Reports</span></button><button className={activeView === 'favorites' ? 'nav-item active' : 'nav-item'} onClick={() => navigate('favorites')}><Bookmark size={18} /><span>Favorites</span>{favoritesCount > 0 && <span className="nav-count">{favoritesCount}</span>}</button>{isAdmin && <button className={activeView === 'settings' ? 'nav-item active' : 'nav-item'} onClick={() => navigate('settings')}><Settings size={18} /><span>Settings</span></button>}</nav>
+        <nav><button className={activeView === 'home' ? 'nav-item active' : 'nav-item'} onClick={() => navigate('home')}><Home size={18} /><span>Home</span></button><button className={activeView === 'reports' ? 'nav-item active' : 'nav-item'} onClick={() => navigate('reports')}><BarChart3 size={18} /><span>Reports</span></button><button className={activeView === 'favorites' ? 'nav-item active' : 'nav-item'} onClick={() => navigate('favorites')}><Bookmark size={18} /><span>Favorites</span>{favoritesCount > 0 && <span className="nav-count">{favoritesCount}</span>}</button>{isAdmin && <button className={activeView === 'settings' ? 'nav-item active' : 'nav-item'} onClick={() => navigate('settings')}><SlidersHorizontal size={18} /><span>Report Configuration</span></button>}</nav>
       </aside>
       <header className="topbar">
         <button className="icon-button menu-trigger" onClick={() => setMenuOpen(true)} aria-label="Open navigation" title="Open navigation"><Menu size={21} /></button>
@@ -649,6 +671,9 @@ export function App() {
         </div>
         <div className="topbar-meta">
           <div className="welcome-block"><strong>Welcome, {session.person.firstName}</strong><span>{session.person.positionName}, {session.school.name}</span></div>
+          <button className="icon-button subtle settings-toggle" onClick={() => setUserSettingsOpen((open) => !open)} aria-label="Open settings" title="Settings" aria-expanded={userSettingsOpen}>
+            <Settings2 size={18} />
+          </button>
           <button className="icon-button subtle theme-toggle" onClick={() => setTheme((current) => current === 'light' ? 'dark' : 'light')} aria-label="Toggle light or dark mode" title={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}>
             {theme === 'light' ? <Moon size={18} /> : <Sun size={18} />}
           </button>
@@ -719,7 +744,7 @@ export function App() {
         <button className="record-drawer-scrim" aria-label="Close drawer" onClick={closeRecord} />
         <aside className="record-drawer" role="dialog" aria-modal="true" aria-label={positionDetails || positionLoading || positionError ? 'Position details' : 'Employee record'}>
           {positionLoading ? <div className="empty-state"><span className="loader" />Loading position details</div> : positionError ? <div className="empty-state"><AlertCircle size={26} /><p>{positionError}</p></div> : positionDetails ? (
-            <PositionDetailView details={positionDetails} onClose={closeRecord} />
+            <PositionDetailView details={positionDetails} onClose={closeRecord} onOpenRecord={openRecordByEmployeeNumber} />
           ) : recordLoading ? <div className="empty-state"><span className="loader" />Loading employee record</div> : recordError ? <div className="empty-state"><AlertCircle size={26} /><p>{recordError}</p></div> : personRecord ? <>
             <div className="record-layout-toolbar">
               <span className="record-layout-hint">Drag sections to reorder</span>
@@ -733,6 +758,10 @@ export function App() {
             <EmployeeRecord record={personRecord} layout={recordLayout} userId={session?.user.id ?? null} onClose={closeRecord} onReorder={reorderRecordSection} onMoveUp={moveRecordSectionUp} onMoveDown={moveRecordSectionDown} onOpenPosition={openPositionByNumber} />
           </> : <div className="detail-placeholder"><Users size={28} /><h3>Select a person</h3><p>Choose a record from the directory to inspect the complete employee report.</p></div>}
         </aside>
+      </>}
+      {userSettingsOpen && <>
+        <button className="record-drawer-scrim" aria-label="Close settings" onClick={() => setUserSettingsOpen(false)} />
+        <UserSettingsPage homePage={homePage} onChangeHomePage={changeHomePage} onClose={() => setUserSettingsOpen(false)} />
       </>}
     </main>
   );
