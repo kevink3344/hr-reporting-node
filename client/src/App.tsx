@@ -1,0 +1,549 @@
+import { useEffect, useRef, useState } from 'react';
+import { AlertCircle, ArrowUpRight, BarChart3, Bookmark, Building2, Check, ChevronDown, ChevronUp, FileText, GripVertical, Home, LogOut, Menu, Moon, Search, Settings, Sun, Users, X } from 'lucide-react';
+import { checkFavorites, getFavorites, getPeople, getPersonRecord, getSchools, login } from './api';
+import type { LoginSession, Person, PersonRecord, School } from './types';
+import { FavoritesPage } from './FavoritesPage';
+import { ReportsPage } from './ReportsPage';
+import { SettingsPage } from './SettingsPage';
+import { DEFAULT_RECORD_LAYOUT, RECORD_SECTION_TITLES, arraysEqual, loadRecordLayout, resetRecordLayout, saveRecordLayout } from './recordLayout';
+import type { RecordSectionId } from './recordLayout';
+
+const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
+
+function RecordField({ label, value, mono = false }: { label: string; value: React.ReactNode; mono?: boolean }) {
+  return <div className="record-field"><span>{label}</span><strong className={mono ? 'mono' : ''}>{value || 'Not provided'}</strong></div>;
+}
+
+function DraggableRecordSection({
+  id,
+  title,
+  tone = '',
+  index,
+  total,
+  isDragging,
+  isDropTarget,
+  onDragStart,
+  onDragOver,
+  onDrop,
+  onDragEnd,
+  onMoveUp,
+  onMoveDown,
+  children,
+}: {
+  id: RecordSectionId;
+  title: string;
+  tone?: string;
+  index: number;
+  total: number;
+  isDragging: boolean;
+  isDropTarget: boolean;
+  onDragStart: (e: React.DragEvent) => void;
+  onDragOver: (e: React.DragEvent) => void;
+  onDrop: (e: React.DragEvent) => void;
+  onDragEnd: () => void;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
+  children: React.ReactNode;
+}) {
+  return <section
+    className={`record-section ${tone} ${isDragging ? 'dragging' : ''} ${isDropTarget ? 'drag-over' : ''}`}
+    draggable
+    onDragStart={onDragStart}
+    onDragOver={onDragOver}
+    onDrop={onDrop}
+    onDragEnd={onDragEnd}
+    aria-label={`${title} section, position ${index + 1} of ${total}, draggable`}
+  >
+    <h4 draggable onDragStart={onDragStart}>
+      <GripVertical size={14} className="record-drag-handle" aria-hidden="true" />
+      <span className="record-section-title">{title}</span>
+      <span className="record-section-actions">
+        <button className="record-move-btn" onClick={onMoveUp} disabled={index === 0} aria-label={`Move ${title} up`} title="Move up"><ChevronUp size={14} /></button>
+        <button className="record-move-btn" onClick={onMoveDown} disabled={index === total - 1} aria-label={`Move ${title} down`} title="Move down"><ChevronDown size={14} /></button>
+      </span>
+    </h4>
+    <div className="record-grid">{children}</div>
+  </section>;
+}
+
+function EmployeeRecord({
+  record,
+  layout,
+  onClose,
+  onReorder,
+  onMoveUp,
+  onMoveDown,
+}: {
+  record: PersonRecord;
+  layout: RecordSectionId[];
+  onClose: () => void;
+  onReorder: (from: number, to: number) => void;
+  onMoveUp: (index: number) => void;
+  onMoveDown: (index: number) => void;
+}) {
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [dropIndex, setDropIndex] = useState<number | null>(null);
+
+  function handleDragStart(e: React.DragEvent, index: number) {
+    setDragIndex(index);
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', String(index));
+  }
+  function handleDragOver(e: React.DragEvent, index: number) {
+    e.preventDefault();
+    if (dragIndex !== null && dragIndex !== index) setDropIndex(index);
+  }
+  function handleDrop(e: React.DragEvent, index: number) {
+    e.preventDefault();
+    const from = dragIndex ?? Number(e.dataTransfer.getData('text/plain'));
+    if (!Number.isNaN(from) && from !== index) onReorder(from, index);
+    setDragIndex(null);
+    setDropIndex(null);
+  }
+  function handleDragEnd() {
+    setDragIndex(null);
+    setDropIndex(null);
+  }
+
+  const renderers: Record<RecordSectionId, React.ReactNode> = {
+    identity: <><RecordField label="NC UID" value={record.identity.ncUid} mono /><RecordField label="Employee ID" value={record.identity.employeeNumber} mono /><RecordField label="Gender" value={record.identity.gender} /><RecordField label="Ethnicity" value={record.identity.ethnicity} /><RecordField label="Date of birth" value={record.identity.dateOfBirth} /><RecordField label="Email" value={record.identity.email} /><RecordField label="Personal email" value={record.identity.personalEmail} /></>,
+    contact: <><RecordField label="Address" value={record.contact.address} /><RecordField label="City" value={record.contact.city} /><RecordField label="State / ZIP" value={`${record.contact.state} ${record.contact.zip}`} mono /><RecordField label="Phone" value={record.contact.phone} mono /></>,
+    assignment: <><RecordField label="Location" value={record.assignment.organization} /><RecordField label="Classroom" value={record.assignment.classroom} /><RecordField label="Position" value={record.assignment.position} /><RecordField label="Account" value={record.assignment.accountCode} mono /><RecordField label="Months" value={record.assignment.months} /><RecordField label="TAP" value={`${record.assignment.tapPercent.toFixed(2)}%`} /><RecordField label="Pay grade" value={record.assignment.payGrade} /><RecordField label="Group" value={record.assignment.group} /><RecordField label="Mail stop" value={record.assignment.mailStop} /><RecordField label="School type" value={record.assignment.schoolType} /><RecordField label="Supervisor" value={record.assignment.supervisor} /></>,
+    compensation: <><RecordField label="Step" value={record.compensation.step} /><RecordField label="Proposed salary" value={money.format(record.compensation.proposedSalary)} /><RecordField label="Fixed supplement" value={money.format(record.compensation.fixedSupplement)} /><RecordField label="Off scale" value={money.format(record.compensation.offScale)} /><RecordField label="Supplement" value={money.format(record.compensation.supplement)} /><RecordField label="TOS state" value={money.format(record.compensation.tosState)} /><RecordField label="TOS supplement" value={money.format(record.compensation.tosSupplement)} /><RecordField label="Teacher differential" value={money.format(record.compensation.teacherDifferential)} /></>,
+    contract: <><RecordField label="Hire date" value={record.contract.hireDate} /><RecordField label="Continuous date" value={record.contract.continuousDate} /><RecordField label="Last changed" value={record.contract.lastChanged} /><RecordField label="Type" value={record.contract.type} /><RecordField label="Start" value={record.contract.start} /><RecordField label="End" value={record.contract.end} /><RecordField label="Renewal year" value={record.contract.renewalYear} /><RecordField label="Change type" value={record.contract.changeType} /><RecordField label="Board number" value={record.contract.boardNumber} mono /></>,
+    licensure: <><RecordField label="Type" value={record.licensure.type} /><RecordField label="Renewal year" value={record.licensure.renewalYear} /><RecordField label="Expires" value={record.licensure.expires} /><div className="record-table-wrap"><table className="record-table"><thead><tr><th>Area</th><th>Description</th><th>Years</th><th>Status</th><th>Code</th></tr></thead><tbody>{record.licensure.areas.map((area) => <tr key={area.code}><td className="mono">{area.area}</td><td>{area.description}</td><td>{area.years}</td><td>{area.status}</td><td className="mono">{area.code}</td></tr>)}</tbody></table></div></>,
+    service: <><RecordField label="Years of service" value={record.service.yearsOfService} /><RecordField label="Months of service" value={record.service.monthsOfService} /><RecordField label="Last updated" value={record.service.lastUpdated} /></>,
+    leave: <><div className="record-table-wrap"><table className="record-table leave-table"><thead><tr><th>Leave type</th><th>Carryover</th><th>Accrued</th><th>Used</th><th>Adjustment</th><th>Balance</th><th>Rate</th><th>Updated</th></tr></thead><tbody>{record.leaveBalances.map((leave) => <tr key={leave.leaveType}><td>{leave.leaveType}</td><td>{leave.carryover}</td><td>{leave.accrued}</td><td>{leave.used}</td><td>{leave.adjustment}</td><td><strong>{leave.balance}</strong></td><td>{leave.accrualRate}</td><td>{leave.lastUpdated}</td></tr>)}</tbody></table></div></>,
+  };
+
+  const tones: Partial<Record<RecordSectionId, string>> = { leave: 'leave-section' };
+
+  return <div className="employee-record">
+    <div className="record-title"><div><p className="eyebrow">Employee record</p><h3>{record.identity.fullName}</h3>{(record as unknown as { _favorited?: boolean })._favorited && <span className="record-pin" title="Favorited"><Bookmark size={13} aria-hidden="true" /> Favorited</span>}</div><div className="record-title-actions"><span className="record-active"><span className="status-dot" />Active</span><button className="icon-button" onClick={onClose} aria-label="Close employee record" title="Close employee record"><X size={17} /></button></div></div>
+    {layout.map((id, index) => <DraggableRecordSection
+      key={id}
+      id={id}
+      title={RECORD_SECTION_TITLES[id]}
+      tone={tones[id] ?? ''}
+      index={index}
+      total={layout.length}
+      isDragging={dragIndex === index}
+      isDropTarget={dropIndex === index}
+      onDragStart={(e) => handleDragStart(e, index)}
+      onDragOver={(e) => handleDragOver(e, index)}
+      onDrop={(e) => handleDrop(e, index)}
+      onDragEnd={handleDragEnd}
+      onMoveUp={() => onMoveUp(index)}
+      onMoveDown={() => onMoveDown(index)}
+    >{renderers[id]}</DraggableRecordSection>)}
+  </div>;
+}
+
+export function App() {
+  const [session, setSession] = useState<LoginSession | null>(null);
+  const [rememberMe, setRememberMe] = useState(() => {
+    try { return window.localStorage.getItem('hr-report-remember-me') === '1'; } catch { return false; }
+  });
+  const [wakeId, setWakeId] = useState(() => {
+    try {
+      if (window.localStorage.getItem('hr-report-remember-me') === '1') {
+        const raw = window.localStorage.getItem('hr-report-credentials');
+        if (raw) { const parsed = JSON.parse(raw) as { wakeId?: string }; return parsed.wakeId ?? ''; }
+      }
+    } catch { /* ignore */ }
+    return '';
+  });
+  const [employeeId, setEmployeeId] = useState(() => {
+    try {
+      if (window.localStorage.getItem('hr-report-remember-me') === '1') {
+        const raw = window.localStorage.getItem('hr-report-credentials');
+        if (raw) { const parsed = JSON.parse(raw) as { employeeId?: string }; return parsed.employeeId ?? ''; }
+      }
+    } catch { /* ignore */ }
+    return '';
+  });
+  const [loginError, setLoginError] = useState('');
+  const [loggingIn, setLoggingIn] = useState(false);
+  const [autoLoginAttempted, setAutoLoginAttempted] = useState(false);
+  const [schools, setSchools] = useState<School[]>([]);
+  const [people, setPeople] = useState<Person[]>([]);
+  const [search, setSearch] = useState('');
+  const [schoolId, setSchoolId] = useState('');
+  const [selectedPerson, setSelectedPerson] = useState<Person | null>(null);
+  const [personRecord, setPersonRecord] = useState<PersonRecord | null>(null);
+  const [recordLoading, setRecordLoading] = useState(false);
+  const [recordError, setRecordError] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [activeView, setActiveView] = useState<'home' | 'reports' | 'favorites' | 'settings'>('home');
+  const [favoritesCount, setFavoritesCount] = useState(0);
+  const isAdmin = session?.user.roles.includes('hr_admin') ?? false;
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    const saved = window.localStorage.getItem('hr-report-theme');
+    return saved === 'dark' ? 'dark' : 'light';
+  });
+  const [recordLayout, setRecordLayout] = useState<RecordSectionId[]>(() => loadRecordLayout(null));
+  const savedLayoutRef = useRef<RecordSectionId[]>(loadRecordLayout(null));
+  const [layoutNotice, setLayoutNotice] = useState('');
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    window.localStorage.setItem('hr-report-theme', theme);
+  }, [theme]);
+
+  useEffect(() => {
+    const next = loadRecordLayout(session?.user.id ?? null);
+    setRecordLayout(next);
+    savedLayoutRef.current = next;
+  }, [session?.user.id]);
+
+  // Auto-login: if user previously checked "Stay signed in", restore session without showing login form.
+  useEffect(() => {
+    if (session || autoLoginAttempted) return;
+    let cancelled = false;
+    try {
+      const shouldRemember = window.localStorage.getItem('hr-report-remember-me') === '1';
+      const raw = window.localStorage.getItem('hr-report-credentials');
+      if (!shouldRemember || !raw) { setAutoLoginAttempted(true); return; }
+      const parsed = JSON.parse(raw) as { wakeId?: string; employeeId?: string };
+      const w = parsed.wakeId?.trim();
+      const e = parsed.employeeId?.trim();
+      if (!w || !e) { setAutoLoginAttempted(true); return; }
+      setLoggingIn(true);
+      login(w, e).then((nextSession) => {
+        if (cancelled) return;
+        setSession(nextSession);
+        setWakeId(w);
+        setEmployeeId(e);
+        setRememberMe(true);
+      }).catch(() => {
+        if (cancelled) return;
+        try {
+          window.localStorage.removeItem('hr-report-credentials');
+          window.localStorage.removeItem('hr-report-remember-me');
+        } catch { /* ignore */ }
+      }).finally(() => {
+        if (cancelled) return;
+        setLoggingIn(false);
+        setAutoLoginAttempted(true);
+      });
+    } catch {
+      setAutoLoginAttempted(true);
+    }
+    return () => { cancelled = true; };
+  }, [session, autoLoginAttempted]);
+
+  function reorderRecordSection(from: number, to: number) {
+    setRecordLayout((prev) => {
+      const next = [...prev];
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved);
+      return next;
+    });
+  }
+  function moveRecordSectionUp(index: number) {
+    if (index <= 0) return;
+    reorderRecordSection(index, index - 1);
+  }
+  function moveRecordSectionDown(index: number) {
+    setRecordLayout((prev) => {
+      if (index >= prev.length - 1) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(index, 1);
+      next.splice(index + 1, 0, moved);
+      return next;
+    });
+  }
+  function saveRecordLayoutState() {
+    saveRecordLayout(session?.user.id ?? null, recordLayout);
+    savedLayoutRef.current = [...recordLayout];
+    setLayoutNotice('Layout saved');
+    window.setTimeout(() => setLayoutNotice(''), 2000);
+  }
+  function resetRecordLayoutState() {
+    resetRecordLayout(session?.user.id ?? null);
+    setRecordLayout([...DEFAULT_RECORD_LAYOUT]);
+    savedLayoutRef.current = [...DEFAULT_RECORD_LAYOUT];
+    setLayoutNotice('Layout reset');
+    window.setTimeout(() => setLayoutNotice(''), 2000);
+  }
+  const isLayoutDirty = !arraysEqual(recordLayout, savedLayoutRef.current);
+
+  async function submitLogin(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setLoggingIn(true);
+    setLoginError('');
+    try {
+      const nextSession = await login(wakeId, employeeId);
+      setSession(nextSession);
+      try {
+        if (rememberMe) {
+          window.localStorage.setItem('hr-report-remember-me', '1');
+          window.localStorage.setItem('hr-report-credentials', JSON.stringify({ wakeId, employeeId }));
+        } else {
+          window.localStorage.removeItem('hr-report-remember-me');
+          window.localStorage.removeItem('hr-report-credentials');
+        }
+      } catch { /* ignore */ }
+    } catch (loginFailure) {
+      setLoginError(loginFailure instanceof Error && loginFailure.message === 'INVALID_CREDENTIALS'
+        ? 'Wake ID and Employee ID did not match a test account.'
+        : 'The sign-in service is unavailable.');
+    } finally {
+      setLoggingIn(false);
+    }
+  }
+
+  function signOut() {
+    setSession(null);
+    setSelectedPerson(null);
+    setPeople([]);
+    setActiveView('home');
+    setMenuOpen(false);
+    try {
+      window.localStorage.removeItem('hr-report-remember-me');
+      window.localStorage.removeItem('hr-report-credentials');
+    } catch { /* ignore */ }
+  }
+
+  function navigate(view: 'home' | 'reports' | 'favorites' | 'settings') {
+    if (view === 'settings' && !isAdmin) return;
+    setActiveView(view);
+    setMenuOpen(false);
+  }
+
+  // Keep favorites count fresh for nav badge
+  useEffect(() => {
+    if (!session) { setFavoritesCount(0); return; }
+    getFavorites(session, { page: 1, pageSize: 1 }).then((res) => setFavoritesCount(res.total)).catch(() => {});
+  }, [session, activeView]);
+
+  // Favorites: open report runner from Favorites page
+  const [favoritesReportNav, setFavoritesReportNav] = useState<{ reportId: string; organization: string } | null>(null);
+  function handleOpenFavoriteReport(reportId: string, organization: string) {
+    setFavoritesReportNav({ reportId, organization });
+    setActiveView('reports');
+    setMenuOpen(false);
+  }
+
+  // Employee record: subtle pin indicator (no toggle per Q4)
+  const [recordFavorite, setRecordFavorite] = useState(false);
+  useEffect(() => {
+    if (!session || !personRecord) { setRecordFavorite(false); return; }
+    // personRecord.personId is the canonical person id
+    const pid = (personRecord as unknown as { personId?: string }).personId ?? selectedPerson?.personId;
+    if (!pid) { setRecordFavorite(false); return; }
+    checkFavorites(session, [pid]).then((checks) => {
+      setRecordFavorite(checks[0]?.favorited ?? false);
+    }).catch(() => setRecordFavorite(false));
+  }, [session, personRecord, selectedPerson?.personId]);
+
+  useEffect(() => {
+    if (!session) return;
+    void Promise.all([getSchools(), getPeople('', '')])
+      .then(([nextSchools, nextPeople]) => {
+        setSchools(nextSchools);
+        setPeople(nextPeople.data);
+      })
+      .catch(() => setError('The lookup service is unavailable. Check that the API is running.'))
+      .finally(() => setLoading(false));
+  }, [session]);
+
+  async function runSearch() {
+    setLoading(true);
+    setError('');
+    try {
+      const result = await getPeople(search, schoolId);
+      setPeople(result.data);
+      setSelectedPerson(null);
+      setPersonRecord(null);
+    } catch {
+      setError('The lookup could not be completed. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function selectPerson(person: Person) {
+    setSelectedPerson(person);
+    setPersonRecord(null);
+    setRecordError('');
+    setRecordLoading(true);
+    try {
+      setPersonRecord(await getPersonRecord(person.personId));
+    } catch {
+      setRecordError('The complete employee record could not be loaded.');
+    } finally {
+      setRecordLoading(false);
+    }
+  }
+
+  async function openRecordByEmployeeNumber(employeeNumber: string) {
+    const trimmed = employeeNumber.trim();
+    if (!trimmed) return;
+    let person = people.find((candidate) => candidate.employeeNumber === trimmed);
+    if (!person) {
+      try {
+        const result = await getPeople(trimmed, '');
+        person = result.data.find((candidate) => candidate.employeeNumber === trimmed) ?? result.data[0] ?? null;
+        if (!person) {
+          setSelectedPerson({ personId: trimmed, employeeNumber: trimmed } as Person);
+          setPersonRecord(null);
+          setRecordError(`No employee record found for ${trimmed}.`);
+          setRecordLoading(false);
+          return;
+        }
+      } catch {
+        setSelectedPerson({ personId: trimmed, employeeNumber: trimmed } as Person);
+        setPersonRecord(null);
+        setRecordError('The complete employee record could not be loaded.');
+        setRecordLoading(false);
+        return;
+      }
+    }
+    await selectPerson(person);
+  }
+
+  const drawerOpen = Boolean(selectedPerson || recordLoading || recordError || personRecord);
+  function closeRecord() {
+    setSelectedPerson(null);
+    setPersonRecord(null);
+    setRecordError('');
+  }
+
+  useEffect(() => {
+    if (!drawerOpen) return;
+    function onKey(event: KeyboardEvent) { if (event.key === 'Escape') closeRecord(); }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [drawerOpen]);
+
+  function clearSearch() {
+    setSearch('');
+    setSchoolId('');
+    void getPeople('', '').then((result) => setPeople(result.data));
+  }
+
+  if (!session) {
+    return <main className="login-shell">
+      <section className="login-art" aria-hidden="true"><div className="login-art-mark"><FileText size={26} /></div><p className="eyebrow">Human Resources</p><h1>Reporting workspace</h1><p>Clearer records. Faster decisions.</p></section>
+      <section className="login-panel" aria-labelledby="login-title">
+        <div className="login-panel-inner">
+          <p className="eyebrow">Secure access</p><h2 id="login-title">Welcome back.</h2><p className="login-copy">Sign in with your Wake credentials to continue to HR Reporting.</p>
+          <form className="login-form" onSubmit={submitLogin}>
+            <label>Wake ID<input value={wakeId} onChange={(event) => setWakeId(event.target.value)} placeholder="your Wake ID" autoComplete="username" required /></label>
+            <label>Employee ID<input value={employeeId} onChange={(event) => setEmployeeId(event.target.value)} placeholder="your employee ID" inputMode="numeric" autoComplete="off" required /></label>
+            <label className="remember-row"><input type="checkbox" checked={rememberMe} onChange={(event) => setRememberMe(event.target.checked)} /> Stay signed in on this device</label>
+            {loginError && <div className="notice error"><AlertCircle size={18} /><span>{loginError}</span></div>}
+            <button className="primary-button login-button" disabled={loggingIn}>{loggingIn ? 'Signing in...' : 'Sign in'}<ArrowUpRight size={17} /></button>
+          </form>
+          <p className="fixture-note">Local testing uses synthetic fixture accounts. Production sign-in will connect to the approved Wake identity provider.</p>
+        </div>
+      </section>
+    </main>;
+  }
+
+  return (
+    <main className="app-shell">
+      {menuOpen && <button className="nav-scrim" aria-label="Close navigation" onClick={() => setMenuOpen(false)} />}
+      <aside className={`side-navigation ${menuOpen ? 'open' : ''}`} aria-label="Main navigation">
+        <div className="side-navigation-heading"><span className="brand-mark"><FileText size={18} /></span><strong>HR Reporting</strong><button className="icon-button" onClick={() => setMenuOpen(false)} aria-label="Close navigation" title="Close navigation"><X size={17} /></button></div>
+        <nav><button className={activeView === 'home' ? 'nav-item active' : 'nav-item'} onClick={() => navigate('home')}><Home size={18} /><span>Home</span></button><button className={activeView === 'reports' ? 'nav-item active' : 'nav-item'} onClick={() => navigate('reports')}><BarChart3 size={18} /><span>Reports</span></button><button className={activeView === 'favorites' ? 'nav-item active' : 'nav-item'} onClick={() => navigate('favorites')}><Bookmark size={18} /><span>Favorites</span>{favoritesCount > 0 && <span className="nav-count">{favoritesCount}</span>}</button>{isAdmin && <button className={activeView === 'settings' ? 'nav-item active' : 'nav-item'} onClick={() => navigate('settings')}><Settings size={18} /><span>Settings</span></button>}</nav>
+      </aside>
+      <header className="topbar">
+        <button className="icon-button menu-trigger" onClick={() => setMenuOpen(true)} aria-label="Open navigation" title="Open navigation"><Menu size={21} /></button>
+        <div className="brand-lockup">
+          <div>
+            <p className="eyebrow">Human Resources</p>
+            <h1>Reporting workspace</h1>
+          </div>
+        </div>
+        <div className="topbar-meta">
+          <div className="welcome-block"><strong>Welcome, {session.person.firstName}</strong><span>{session.person.positionName}, {session.school.name}</span></div>
+          <button className="icon-button subtle theme-toggle" onClick={() => setTheme((current) => current === 'light' ? 'dark' : 'light')} aria-label="Toggle light or dark mode" title={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}>
+            {theme === 'light' ? <Moon size={18} /> : <Sun size={18} />}
+          </button>
+          <button className="icon-button subtle logout-button" onClick={signOut} aria-label="Sign out" title="Sign out"><LogOut size={18} /></button>
+        </div>
+      </header>
+
+      {activeView === 'reports' ? <ReportsPage schools={schools} session={session} onManage={isAdmin ? () => navigate('settings') : undefined} onOpenRecord={openRecordByEmployeeNumber} favoritesNav={favoritesReportNav} onFavoritesNavConsumed={() => setFavoritesReportNav(null)} /> : activeView === 'favorites' ? <FavoritesPage session={session} schools={schools} onOpenRecord={openRecordByEmployeeNumber} onOpenReport={handleOpenFavoriteReport} /> : activeView === 'settings' ? (isAdmin && session ? <SettingsPage session={session} schools={schools} /> : <section className="reports-page"><div className="notice error"><AlertCircle size={18} /><span>Access denied. Admin access is required.</span></div></section>) : <>
+      <section className="hero-band">
+        <div>
+          <p className="eyebrow">People directory</p>
+          <h2>Find the right record quickly.</h2>
+          <p className="hero-copy">Search employee records by name, employee number, or organization.</p>
+        </div>
+        <div className="hero-stat"><Users size={18} /><strong>{people.length}</strong><span>visible records</span></div>
+      </section>
+
+      <section className="workspace-grid" aria-label="People lookup">
+        <div className="directory-panel">
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">Directory</p>
+              <h3>People lookup</h3>
+            </div>
+            <span className="result-count">{people.length} results</span>
+          </div>
+
+          <div className="search-row">
+            <label className="search-field">
+              <Search size={18} aria-hidden="true" />
+              <span className="sr-only">Search people</span>
+              <input value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void runSearch(); }} placeholder="Name, employee number, or organization" />
+              {search && <button className="field-clear" onClick={() => setSearch('')} aria-label="Clear search" title="Clear search"><X size={15} /></button>}
+            </label>
+            <label className="select-field">
+              <Building2 size={17} aria-hidden="true" />
+              <span className="sr-only">Filter by school</span>
+              <select value={schoolId} onChange={(event) => setSchoolId(event.target.value)}>
+                <option value="">All schools and departments</option>
+                {schools.map((school) => <option key={school.id} value={school.id}>{school.name}</option>)}
+              </select>
+              <ChevronDown size={15} aria-hidden="true" />
+            </label>
+            <button className="primary-button" onClick={() => void runSearch()}><Search size={17} />Search</button>
+          </div>
+
+          {error && <div className="notice error"><AlertCircle size={18} /><span>{error}</span></div>}
+          {loading ? <div className="empty-state"><span className="loader" />Loading directory</div> : people.length === 0 ? <div className="empty-state">No people match the current filters.</div> : (
+            <div className="table-wrap">
+              <table>
+                <thead><tr><th>Person</th><th>Organization</th><th>Position</th><th>Employee no.</th><th><span className="sr-only">Open</span></th></tr></thead>
+                <tbody>{people.map((person) => <tr key={person.personId} className={selectedPerson?.personId === person.personId ? 'selected' : ''} onClick={() => void selectPerson(person)}>
+                  <td><strong>{person.fullName}</strong><span>{person.email}</span></td>
+                  <td>{person.organization}</td><td>{person.positionName}</td><td className="mono">{person.employeeNumber}</td>
+                  <td><ArrowUpRight size={17} aria-hidden="true" /></td>
+                </tr>)}</tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
+        <div className="detail-panel detail-panel--placeholder" aria-hidden={drawerOpen ? 'true' : undefined}>
+          <div className="detail-placeholder"><Users size={28} /><h3>Select a person</h3><p>Choose a record from the directory to inspect the complete employee report.</p></div>
+        </div>
+      </section>
+      </>}
+      {drawerOpen && <>
+        <button className="record-drawer-scrim" aria-label="Close employee record" onClick={closeRecord} />
+        <aside className="record-drawer" role="dialog" aria-modal="true" aria-label="Employee record">
+          {recordLoading ? <div className="empty-state"><span className="loader" />Loading employee record</div> : recordError ? <div className="empty-state"><AlertCircle size={26} /><p>{recordError}</p></div> : personRecord ? <>
+            <div className="record-layout-toolbar">
+              <span className="record-layout-hint">Drag sections to reorder</span>
+              <span className="record-layout-actions">
+                <button className="back-button" onClick={resetRecordLayoutState}>Reset to default</button>
+                <button className="export-button" onClick={saveRecordLayoutState} disabled={!isLayoutDirty}><Check size={14} />Save layout</button>
+              </span>
+            </div>
+            {layoutNotice && <div className="notice success" role="status" aria-live="polite">{layoutNotice}</div>}
+            <div aria-live="polite" className="sr-only">{layoutNotice}</div>
+            <EmployeeRecord record={personRecord} layout={recordLayout} onClose={closeRecord} onReorder={reorderRecordSection} onMoveUp={moveRecordSectionUp} onMoveDown={moveRecordSectionDown} />
+          </> : <div className="detail-placeholder"><Users size={28} /><h3>Select a person</h3><p>Choose a record from the directory to inspect the complete employee report.</p></div>}
+        </aside>
+      </>}
+    </main>
+  );
+}

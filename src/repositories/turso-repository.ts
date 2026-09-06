@@ -1,0 +1,1074 @@
+import type { Value } from '@libsql/client';
+import type {
+  GenericReportRun,
+  OpenPositionRow,
+  Person,
+  PersonFavorite,
+  PersonRecord,
+  ReportDefinition,
+  ReportSection,
+  ReportView,
+  ReportViewComment,
+  ReportViewInvite,
+  School,
+  ViewDefinition
+} from '../types.js';
+import type {
+  PersonFavoriteInput,
+  Repositories,
+  ReportDefinitionInput,
+  ReportDefinitionUpdate,
+  ReportListFilter,
+  ReportSectionInput,
+  ReportSectionUpdate,
+  ReportViewCommentInput,
+  ReportViewInput,
+  ReportViewInviteInput,
+  ReportViewListFilter,
+  ReportViewUpdate
+} from './contracts.js';
+import { getLibsqlClient, query } from '../db-turso.js';
+import { viewDefinitionSchema } from '../report-views.js';
+
+/** Coerce possibly-undefined model fields into libsql-compatible values. */
+function dbValue(value: string | number | null | undefined): Value {
+  if (value === undefined) return null;
+  return value;
+}
+import { REPORT_ROW_CAP, bindOrganization, newId, nowIso, validateReportSql } from '../reports-sql.js';
+import { parseHighlightRules, reportHighlightRulesSchema } from '../report-highlight.js';
+
+// Legacy open_pos_read.inc, adapted to SQLite/Turso:
+//   * CONCAT(...) -> COALESCE(...) || '...' (NULL segments become '')
+//   * NOW() -> date('now')
+//   * cross-type joins use CAST (pos_number INTEGER vs TEXT, person_id TEXT vs INTEGER)
+type OpenPositionSqlRow = {
+  pos_start: string | null;
+  pos_ending: string | null;
+  pos_number: number | string | null;
+  pos_name: string | null;
+  organization: string | null;
+  account_number: string | null;
+  months: number | null;
+  a_months: number | null;
+  full_name: string | null;
+  emp_number: string | null;
+  classroom_assignment: string | null;
+  mailstop: string | null;
+  tenure_code: string | null;
+  contract_id: string | null;
+  contract_end: string | null;
+  tap: number | null;
+  Degree: string | null;
+  nbpts_expire: string | null;
+};
+
+const OPEN_POSITIONS_SQL = `
+SELECT DISTINCT
+  pi.pos_start,
+  pi.pos_ending,
+  pi.pos_number,
+  pi.pos_name,
+  pi.organization,
+  COALESCE(pi.fund, '') || '-' || COALESCE(pi.purpose, '') || '-' ||
+    COALESCE(pi.program, '') || '-' || COALESCE(pi.object, '') || '-' ||
+    COALESCE(pi.level, '') || '-' || COALESCE(pi.cost_center, '') AS account_number,
+  pi.months,
+  e.a_months,
+  IFNULL(e.full_name, '') AS full_name,
+  IFNULL(e.emp_number, '') AS emp_number,
+  IFNULL(e.classroom_assignment, '') AS classroom_assignment,
+  IFNULL(e.mailstop, '') AS mailstop,
+  IFNULL(e.tenure_code, '') AS tenure_code,
+  IFNULL(e.contract_id, '') AS contract_id,
+  IFNULL(e.contract_end, '') AS contract_end,
+  IFNULL(e.tap, '') AS tap,
+  IFNULL(e.Degree, '') AS Degree,
+  IFNULL(e.nbpts_expire, '') AS nbpts_expire
+FROM position_info pi
+LEFT JOIN employee_info e
+  ON CAST(e.pos_number AS INTEGER) = pi.pos_number
+LEFT JOIN cert_info c
+  ON CAST(e.person_id AS INTEGER) = c.person_id
+WHERE (
+        pi.pos_ending > date('now')
+        OR IFNULL(pi.pos_ending, '0000-00-00') LIKE '0000-00-00%'
+      )
+  AND (
+        (CAST(pi.pos_number AS TEXT) LIKE '999%' AND e.full_name > ' ')
+        OR pi.pos_number < 9990000
+      )
+  AND pi.organization = ?
+ORDER BY pi.object, pi.pos_name;
+`;
+
+function toOpenPosition(row: OpenPositionSqlRow): OpenPositionRow {
+  return {
+    posStart: row.pos_start ?? '',
+    posEnding: row.pos_ending ?? '',
+    posNumber: String(row.pos_number ?? ''),
+    posName: row.pos_name ?? '',
+    organization: row.organization ?? '',
+    accountNumber: row.account_number ?? '',
+    monthsAvailable: row.months ?? null,
+    monthsUsed: row.a_months ?? null,
+    fullName: row.full_name ?? '',
+    employeeNumber: row.emp_number ?? '',
+    classroom: row.classroom_assignment ?? '',
+    mailstop: row.mailstop ?? '',
+    tenureCode: row.tenure_code ?? '',
+    contractId: row.contract_id ?? '',
+    contractEnd: row.contract_end ?? '',
+    tap: row.tap !== null && row.tap !== undefined ? String(row.tap) : '',
+    degree: row.Degree ?? '',
+    nbptsExpire: row.nbpts_expire ?? ''
+  };
+}
+
+async function openPositions(organization: string): Promise<OpenPositionRow[]> {
+  const rows = await query<OpenPositionSqlRow>(OPEN_POSITIONS_SQL, [organization]);
+  return rows.map(toOpenPosition);
+}
+
+type EmployeeRow = {
+  id: number;
+  person_id: string | number;
+  emp_number: string | null;
+  first_name: string | null;
+  last_name: string | null;
+  full_name: string | null;
+  e_mail: string | null;
+  organization: string | null;
+  pos_name: string | null;
+  cost_center: string | null;
+  object: string | null;
+  account_code: string | null;
+  primary_flag: string | null;
+  position_id: string | null;
+  classroom_assignment: string | null;
+  a_months: number | null;
+  mailstop: string | null;
+  // identity / personal fields
+  socsec: string | null;
+  SSN: string | null;
+  ethnicity: string | null;
+  sex: string | null;
+  dob: string | null;
+  personal_email: string | null;
+  // assignment
+  pay_basis: string | null;
+  category: string | null;
+  group1: string | null;
+  pay_grade: string | null;
+  tap: number | null;
+  loc_type: string | null;
+  person_type: string | null;
+  region: string | null;
+  title: string | null;
+  assignment_status: string | null;
+  assignment_number: string | null;
+  Supervisor: string | null;
+  // compensation
+  step: number | null;
+  proposed_salary: number | null;
+  fixed_supplement: number | null;
+  off_scale: string | null;
+  supp_rate: number | null;
+  monthly_supplement: number | null;
+  normal_hours: number | null;
+  TOS_State: number | null;
+  AP_Teacher_Diff: number | null;
+  // contract
+  hire_date: string | null;
+  continuous_service_date: string | null;
+  last_change: string | null;
+  contract_type: string | null;
+  contract_start: string | null;
+  contract_end: string | null;
+  renewal_start: string | null;
+  renewal_end: string | null;
+  change_type: string | null;
+  board_number: string | null;
+  // licensure
+  certification_type: string | null;
+  cert_areas: string | null;
+  license_expiration: string | null;
+  nbpts_expire: string | null;
+  // service
+  years_of_serv: number | null;
+  months_of_serv: number | null;
+  last_updated: string | null;
+};
+
+type SchoolRow = {
+  school_no: string | null;
+  school_name: string | null;
+  school_level: string | null;
+};
+
+type AddressRow = {
+  person_id: string | null;
+  address: string | null;
+  city: string | null;
+  state: string | null;
+  zip: string | null;
+  phone: string | null;
+};
+
+type LeaveRow = {
+  person_id: string | null;
+  assignment_id: string | null;
+  accrual_plan: string | null;
+  ytd_accrual_balance: number | null;
+  MaxOfaccrual_rate: number | null;
+  Carryover: number | null;
+  SumOfytd_accrued: number | null;
+  SumOfytd_used: number | null;
+  SumOfadjustments: number | null;
+  MaxOfperiod_end_date: string | null;
+};
+
+type CertAreaRow = {
+  person_id: string | null;
+  area: string | null;
+  area_description: string | null;
+  years: number | null;
+  status: string | null;
+  class: string | null;
+};
+
+async function toPerson(row: EmployeeRow): Promise<Person> {
+  const schools = await query<SchoolRow>('SELECT school_no, school_name, school_level FROM schools');
+  const orgId = String(row.organization ?? '');
+  const school = schools.find((candidate) => candidate.school_name === row.organization || candidate.school_no === orgId);
+
+  return {
+    personId: String(row.person_id),
+    employeeNumber: String(row.emp_number ?? ''),
+    firstName: row.first_name ?? '',
+    lastName: row.last_name ?? '',
+    fullName: row.full_name ?? '',
+    email: row.e_mail ?? '',
+    organizationId: school?.school_no ?? '',
+    organization: row.organization ?? '',
+    positionName: row.pos_name ?? '',
+    costCenter: row.cost_center ?? '',
+    objectCode: row.object ?? '',
+    primaryFlag: row.primary_flag ?? '',
+    activeAssignment: true
+  };
+}
+
+export const tursoRepositories: Repositories = {
+  people: {
+    async list() {
+      const rows = await query<EmployeeRow>('SELECT * FROM employee_info');
+      return Promise.all(rows.map(toPerson));
+    }
+  },
+  schools: {
+    async list() {
+      const rows = await query<SchoolRow>('SELECT school_no, school_name, school_level FROM schools');
+      return rows
+        .filter((row) => row.school_name)
+        .map((row): School => ({
+          id: row.school_no ?? String(row.school_name),
+          schoolNumber: row.school_no ?? '',
+          name: row.school_name ?? '',
+          type: (row.school_level?.toLowerCase().includes('school') ? 'school' : 'department') as School['type'],
+          active: true
+        }));
+    }
+  },
+  personRecords: {
+    async getByPersonId(personId) {
+      const [employee] = await query<EmployeeRow>('SELECT * FROM employee_info WHERE person_id = ? LIMIT 1', [personId]);
+      if (!employee) return null;
+
+      const [schools, address, leaves, certAreas] = await Promise.all([
+        query<SchoolRow>('SELECT school_no, school_name, school_level FROM schools'),
+        query<AddressRow>('SELECT person_id, address, city, state, zip, phone FROM address WHERE person_id = ?', [personId]),
+        query<LeaveRow>('SELECT person_id, assignment_id, accrual_plan, ytd_accrual_balance, MaxOfaccrual_rate, Carryover, SumOfytd_accrued, SumOfytd_used, SumOfadjustments, MaxOfperiod_end_date FROM leaves WHERE person_id = ?', [personId]),
+        query<CertAreaRow>('SELECT person_id, area, area_description, years, status, class FROM cert_area WHERE person_id = ?', [personId])
+      ]);
+      const school = schools.find((candidate) => candidate.school_name === employee.organization);
+      const addressRow = address[0];
+
+      return buildRecord(employee, school, addressRow, leaves, certAreas);
+    }
+  },
+  reports: { openPositions },
+  reportSections: {
+    async list(includeInactive = false) {
+      const rows = await query<SectionRow>(
+        `SELECT s.id, s.title, s.sort_order, s.is_active, s.created_at, s.updated_at,
+                (SELECT COUNT(*) FROM reports r WHERE r.section_id = s.id) AS report_count
+         FROM report_sections s
+         ${includeInactive ? '' : 'WHERE s.is_active = 1'}
+         ORDER BY s.sort_order ASC, s.title ASC`
+      );
+      return rows.map(toSection);
+    },
+    async getById(id) {
+      const rows = await query<SectionRow>(
+        `SELECT s.id, s.title, s.sort_order, s.is_active, s.created_at, s.updated_at,
+                (SELECT COUNT(*) FROM reports r WHERE r.section_id = s.id) AS report_count
+         FROM report_sections s WHERE s.id = ? LIMIT 1`,
+        [id]
+      );
+      return rows[0] ? toSection(rows[0]) : null;
+    },
+    async create(input: ReportSectionInput) {
+      const title = input.title.trim();
+      if (!title) throw codedError('TITLE_REQUIRED');
+      const existing = await query<{ id: string }>('SELECT id FROM report_sections WHERE LOWER(title) = LOWER(?) LIMIT 1', [title]);
+      if (existing.length > 0) throw codedError('SECTION_TITLE_CONFLICT');
+      const count = await query<{ n: number }>('SELECT COUNT(*) AS n FROM report_sections');
+      const section: ReportSection = {
+        id: newId(),
+        title,
+        sortOrder: input.sortOrder ?? (count[0]?.n ?? 0) + 1,
+        isActive: input.isActive ?? true,
+        createdAt: nowIso(),
+        updatedAt: nowIso()
+      };
+      await query(
+        'INSERT INTO report_sections (id, title, sort_order, is_active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+        [section.id, section.title, section.sortOrder, section.isActive ? 1 : 0, dbValue(section.createdAt), dbValue(section.updatedAt)]
+      );
+      return { ...section, reportCount: 0 };
+    },
+    async update(id, patch: ReportSectionUpdate) {
+      const current = await query<SectionRow>('SELECT * FROM report_sections WHERE id = ? LIMIT 1', [id]);
+      if (!current[0]) return null;
+      const nextTitle = (patch.title ?? current[0].title ?? '').trim();
+      if (!nextTitle) throw codedError('TITLE_REQUIRED');
+      const clash = await query<{ id: string }>(
+        'SELECT id FROM report_sections WHERE LOWER(title) = LOWER(?) AND id != ? LIMIT 1',
+        [nextTitle, id]
+      );
+      if (clash.length > 0) throw codedError('SECTION_TITLE_CONFLICT');
+      const nextSort = patch.sortOrder ?? current[0].sort_order ?? 0;
+      const nextActive = patch.isActive ?? (current[0].is_active === 1);
+      const updatedAt = nowIso();
+      await query('UPDATE report_sections SET title = ?, sort_order = ?, is_active = ?, updated_at = ? WHERE id = ?', [
+        nextTitle, nextSort, nextActive ? 1 : 0, updatedAt, id
+      ]);
+      const refreshed = await query<SectionRow>(
+        `SELECT s.id, s.title, s.sort_order, s.is_active, s.created_at, s.updated_at,
+                (SELECT COUNT(*) FROM reports r WHERE r.section_id = s.id) AS report_count
+         FROM report_sections s WHERE s.id = ? LIMIT 1`,
+        [id]
+      );
+      return refreshed[0] ? toSection(refreshed[0]) : null;
+    },
+    async delete(id) {
+      const existing = await query<{ id: string }>('SELECT id FROM report_sections WHERE id = ? LIMIT 1', [id]);
+      if (!existing[0]) return { deleted: false, reason: 'NOT_FOUND' as const };
+      const count = await query<{ n: number }>('SELECT COUNT(*) AS n FROM reports WHERE section_id = ?', [id]);
+      if ((count[0]?.n ?? 0) > 0) return { deleted: false, reason: 'HAS_REPORTS' as const };
+      await query('DELETE FROM report_sections WHERE id = ?', [id]);
+      return { deleted: true };
+    }
+  },
+  reportDefinitions: {
+    async list(filter: ReportListFilter = {}) {
+      const conditions: string[] = [];
+      const params: Value[] = [];
+      if (filter.sectionId) {
+        conditions.push('r.section_id = ?');
+        params.push(filter.sectionId);
+      }
+      if (!filter.includeInactive) {
+        conditions.push("r.status = 'active'");
+      }
+      const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+      const rows = await query<ReportRow>(
+        `SELECT r.*, s.title AS section_title FROM reports r
+         LEFT JOIN report_sections s ON s.id = r.section_id
+         ${where} ORDER BY r.title ASC`,
+        params
+      );
+      return rows.map(toReport);
+    },
+    async getById(id) {
+      const rows = await query<ReportRow>(
+        `SELECT r.*, s.title AS section_title FROM reports r
+         LEFT JOIN report_sections s ON s.id = r.section_id
+         WHERE r.id = ? LIMIT 1`,
+        [id]
+      );
+      return rows[0] ? toReport(rows[0]) : null;
+    },
+    async create(input: ReportDefinitionInput) {
+      const title = input.title.trim();
+      if (!title) throw codedError('TITLE_REQUIRED');
+      if (title.length > 150) throw codedError('TITLE_TOO_LONG');
+      const section = await query<SectionRow>('SELECT * FROM report_sections WHERE id = ? AND is_active = 1 LIMIT 1', [input.sectionId]);
+      if (!section[0]) throw codedError('SECTION_NOT_FOUND');
+      const clash = await query<{ id: string }>(
+        'SELECT id FROM reports WHERE section_id = ? AND LOWER(title) = LOWER(?) LIMIT 1',
+        [input.sectionId, title]
+      );
+      if (clash.length > 0) throw codedError('REPORT_TITLE_CONFLICT');
+      const safety = validateReportSql(input.sqlQuery);
+      if (!safety.ok) throw codedError(safety.error);
+      if (input.highlightRules !== undefined) {
+        const parsed = reportHighlightRulesSchema.safeParse(input.highlightRules);
+        if (!parsed.success) throw codedError('HIGHLIGHT_RULE_INVALID');
+      }
+      const highlightRules = input.highlightRules !== undefined
+        ? (reportHighlightRulesSchema.parse(input.highlightRules) as ReportDefinition['highlightRules'])
+        : [];
+      const now = nowIso();
+      const report: ReportDefinition = {
+        id: newId(),
+        sectionId: input.sectionId,
+        sectionTitle: section[0].title ?? '',
+        title,
+        description: (input.description ?? '').trim(),
+        sqlQuery: input.sqlQuery.trim(),
+        status: input.status ?? 'inactive',
+        highlightRules,
+        createdBy: input.createdBy ?? null,
+        createdAt: now,
+        updatedAt: now
+      };
+      await query(
+        'INSERT INTO reports (id, section_id, title, description, sql_query, status, highlight_rules, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [report.id, report.sectionId, report.title, report.description, dbValue(report.sqlQuery), report.status, JSON.stringify(highlightRules ?? []), dbValue(report.createdBy), dbValue(report.createdAt), dbValue(report.updatedAt)]
+      );
+      return report;
+    },
+    async update(id, patch: ReportDefinitionUpdate) {
+      const rows = await query<ReportRow>('SELECT * FROM reports WHERE id = ? LIMIT 1', [id]);
+      const current = rows[0];
+      if (!current) return null;
+      const nextSectionId = patch.sectionId ?? current.section_id;
+      const section = await query<SectionRow>('SELECT * FROM report_sections WHERE id = ? AND is_active = 1 LIMIT 1', [nextSectionId]);
+      if (!section[0]) throw codedError('SECTION_NOT_FOUND');
+      const nextTitle = (patch.title ?? current.title ?? '').trim();
+      if (!nextTitle) throw codedError('TITLE_REQUIRED');
+      if (nextTitle.length > 150) throw codedError('TITLE_TOO_LONG');
+      const clash = await query<{ id: string }>(
+        'SELECT id FROM reports WHERE section_id = ? AND LOWER(title) = LOWER(?) AND id != ? LIMIT 1',
+        [nextSectionId, nextTitle, id]
+      );
+      if (clash.length > 0) throw codedError('REPORT_TITLE_CONFLICT');
+      const nextDescription = (patch.description ?? current.description ?? '').trim();
+      const nextSql = (patch.sqlQuery ?? current.sql_query ?? '').trim();
+      const safety = validateReportSql(nextSql);
+      if (!safety.ok) throw codedError(safety.error);
+      if (patch.highlightRules !== undefined) {
+        const parsed = reportHighlightRulesSchema.safeParse(patch.highlightRules);
+        if (!parsed.success) throw codedError('HIGHLIGHT_RULE_INVALID');
+      }
+      const nextHighlightRules = patch.highlightRules !== undefined
+        ? (reportHighlightRulesSchema.parse(patch.highlightRules) as ReportDefinition['highlightRules'])
+        : parseHighlightRules((current as ReportRow).highlight_rules);
+      const nextStatus = patch.status ?? current.status;
+      const updatedAt = nowIso();
+      await query(
+        'UPDATE reports SET section_id = ?, title = ?, description = ?, sql_query = ?, status = ?, highlight_rules = ?, updated_at = ? WHERE id = ?',
+        [nextSectionId, nextTitle, nextDescription, nextSql, nextStatus, JSON.stringify(nextHighlightRules ?? []), updatedAt, id]
+      );
+      const refreshed = await query<ReportRow>(
+        `SELECT r.*, s.title AS section_title FROM reports r
+         LEFT JOIN report_sections s ON s.id = r.section_id
+         WHERE r.id = ? LIMIT 1`,
+        [id]
+      );
+      return refreshed[0] ? toReport(refreshed[0]) : null;
+    },
+    async delete(id) {
+      const existing = await query<{ id: string }>('SELECT id FROM reports WHERE id = ? LIMIT 1', [id]);
+      if (!existing[0]) return false;
+      await query('DELETE FROM reports WHERE id = ?', [id]);
+      return true;
+    },
+    async countBySection(sectionId) {
+      const rows = await query<{ n: number }>('SELECT COUNT(*) AS n FROM reports WHERE section_id = ?', [sectionId]);
+      return rows[0]?.n ?? 0;
+    },
+    async run(id, organization) {
+      const rows = await query<ReportRow>(
+        `SELECT r.*, s.title AS section_title FROM reports r
+         LEFT JOIN report_sections s ON s.id = r.section_id
+         WHERE r.id = ? LIMIT 1`,
+        [id]
+      );
+      const report = rows[0] ? toReport(rows[0]) : null;
+      if (!report || !report.sqlQuery) return null;
+      // Defense in depth: re-validate stored SQL at run time.
+      const safety = validateReportSql(report.sqlQuery);
+      if (!safety.ok) throw codedError(safety.error);
+      const { text, params } = bindOrganization(report.sqlQuery, organization);
+      const result = await getLibsqlClient().execute({ sql: text, args: params });
+      const columns = [...result.columns];
+      const capped = result.rows.slice(0, REPORT_ROW_CAP).map((row) => {
+        const record: Record<string, unknown> = {};
+        for (const column of columns) {
+          const cell = (row as Record<string, unknown>)[column];
+          record[column] = cell === null ? null : cell;
+        }
+        return record;
+      });
+      return {
+        report: { id: report.id, title: report.title, description: report.description, sectionTitle: report.sectionTitle, highlightRules: report.highlightRules },
+        organization,
+        columns,
+        rows: capped,
+        truncated: result.rows.length > REPORT_ROW_CAP
+      } satisfies GenericReportRun;
+    },
+    async explain(sqlQuery) {
+      const safety = validateReportSql(sqlQuery);
+      if (!safety.ok) return safety;
+      try {
+        const { text, params } = bindOrganization(sqlQuery.trim(), '__validate__');
+        await getLibsqlClient().execute({ sql: `EXPLAIN ${text}`, args: params });
+        return { ok: true };
+      } catch {
+        return { ok: false, error: 'SQL_EXPLAIN_FAILED' };
+      }
+    }
+  },
+  reportViews: {
+    async list(filter: ReportViewListFilter) {
+      // Owned views
+      const owned = await query<ReportViewRow>('SELECT * FROM report_views WHERE owner_id = ?', [filter.callerId]);
+      // Shared via accepted invites (by Wake ID or email)
+      const inviteRows = await query<ReportViewInviteRow>(
+        'SELECT * FROM report_view_invites WHERE (invitee_id = ? OR (invitee_email IS NOT NULL AND LOWER(invitee_email) = LOWER(?))) AND status = ?',
+        [filter.callerId, filter.callerEmail ?? '', 'accepted']
+      );
+      const sharedIds = [...new Set(inviteRows.map((row) => row.view_id))];
+      let shared: ReportViewRow[] = [];
+      if (sharedIds.length > 0) {
+        const placeholders = sharedIds.map(() => '?').join(',');
+        shared = await query<ReportViewRow>(`SELECT * FROM report_views WHERE id IN (${placeholders})`, sharedIds as unknown as Value[]);
+      }
+      const merged = new Map<string, ReportViewRow>();
+      for (const row of [...owned, ...shared]) merged.set(row.id, row);
+      let result = [...merged.values()].map(toReportView);
+      if (filter.reportId) result = result.filter((view) => view.reportId === filter.reportId);
+      if (filter.organization) result = result.filter((view) => view.organization === filter.organization);
+      return result.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    },
+    async getById(id, callerId, callerEmail) {
+      const rows = await query<ReportViewRow>('SELECT * FROM report_views WHERE id = ? LIMIT 1', [id]);
+      if (!rows[0]) return null;
+      const view = toReportView(rows[0]);
+      const canRead = view.ownerId === callerId || (await canReadView(id, callerId, callerEmail));
+      if (!canRead) return null;
+      return view;
+    },
+    async create(input: ReportViewInput) {
+      const name = input.name.trim();
+      if (!name || name.length < 3 || name.length > 60) throw codedError('VIEW_NAME_REQUIRED');
+      const clash = await query<{ id: string }>(
+        'SELECT id FROM report_views WHERE owner_id = ? AND report_id = ? AND organization = ? AND LOWER(name) = LOWER(?) LIMIT 1',
+        [input.ownerId, input.reportId, input.organization, name]
+      );
+      if (clash.length > 0) throw codedError('VIEW_NAME_CONFLICT');
+      const parsed = viewDefinitionSchema.safeParse(input.definition);
+      if (!parsed.success) throw codedError('VIEW_DEFINITION_INVALID');
+      const now = nowIso();
+      const id = newId();
+      await query(
+        'INSERT INTO report_views (id, report_id, organization, owner_id, owner_name, name, description, visibility, definition, version, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [id, input.reportId, input.organization, input.ownerId, input.ownerName, name, (input.description ?? '').trim().slice(0, 200), input.visibility ?? 'private', JSON.stringify(parsed.data), 1, now, now]
+      );
+      const created = await query<ReportViewRow>('SELECT * FROM report_views WHERE id = ? LIMIT 1', [id]);
+      return toReportView(created[0]);
+    },
+    async update(id, patch, callerId) {
+      const rows = await query<ReportViewRow>('SELECT * FROM report_views WHERE id = ? LIMIT 1', [id]);
+      if (!rows[0]) return null;
+      const current = toReportView(rows[0]);
+      const isOwner = current.ownerId === callerId;
+      const editorInvites = await query<ReportViewInviteRow>(
+        'SELECT * FROM report_view_invites WHERE view_id = ? AND invitee_id = ? AND status = ? AND role = ? LIMIT 1',
+        [id, callerId, 'accepted', 'editor']
+      );
+      if (!isOwner && editorInvites.length === 0) throw codedError('FORBIDDEN');
+      if (patch.expectedVersion !== undefined && patch.expectedVersion !== current.version) throw codedError('VERSION_CONFLICT');
+      const nextName = patch.name !== undefined ? patch.name.trim() : current.name;
+      if (patch.name !== undefined && (!nextName || nextName.length < 3 || nextName.length > 60)) throw codedError('VIEW_NAME_REQUIRED');
+      if (patch.name !== undefined) {
+        const clash = await query<{ id: string }>(
+          'SELECT id FROM report_views WHERE owner_id = ? AND report_id = ? AND organization = ? AND LOWER(name) = LOWER(?) AND id != ? LIMIT 1',
+          [current.ownerId, current.reportId, current.organization, nextName, id]
+        );
+        if (clash.length > 0) throw codedError('VIEW_NAME_CONFLICT');
+      }
+      const nextDescription = patch.description !== undefined ? patch.description.trim().slice(0, 200) : current.description;
+      const nextVisibility = patch.visibility ?? current.visibility;
+      if (patch.visibility !== undefined && !isOwner) throw codedError('FORBIDDEN');
+      let nextDefinition = current.definition;
+      if (patch.definition !== undefined) {
+        const parsed = viewDefinitionSchema.safeParse(patch.definition);
+        if (!parsed.success) throw codedError('VIEW_DEFINITION_INVALID');
+        nextDefinition = parsed.data as ViewDefinition;
+      }
+      const nextVersion = current.version + 1;
+      const now = nowIso();
+      await query('UPDATE report_views SET name = ?, description = ?, visibility = ?, definition = ?, version = ?, updated_at = ? WHERE id = ?', [
+        nextName, nextDescription, nextVisibility, JSON.stringify(nextDefinition), nextVersion, now, id
+      ]);
+      const refreshed = await query<ReportViewRow>('SELECT * FROM report_views WHERE id = ? LIMIT 1', [id]);
+      return toReportView(refreshed[0]);
+    },
+    async delete(id, callerId) {
+      const rows = await query<ReportViewRow>('SELECT * FROM report_views WHERE id = ? LIMIT 1', [id]);
+      if (!rows[0]) return false;
+      if (rows[0].owner_id !== callerId) throw codedError('FORBIDDEN');
+      await query('DELETE FROM report_views WHERE id = ?', [id]);
+      return true;
+    }
+  },
+  reportViewInvites: {
+    async listByView(viewId, _callerId) {
+      const rows = await query<ReportViewInviteRow>('SELECT * FROM report_view_invites WHERE view_id = ? ORDER BY created_at ASC', [viewId]);
+      return rows.map(toReportViewInvite);
+    },
+    async listInbox(callerId, callerEmail, status) {
+      const params: Value[] = [callerId, callerEmail ?? ''];
+      let sql = 'SELECT * FROM report_view_invites WHERE (invitee_id = ? OR (invitee_email IS NOT NULL AND LOWER(invitee_email) = LOWER(?)))';
+      if (status) {
+        sql += ' AND status = ?';
+        params.push(status);
+      }
+      sql += ' ORDER BY created_at DESC';
+      const rows = await query<ReportViewInviteRow>(sql, params);
+      return rows.map(toReportViewInvite);
+    },
+    async create(input: ReportViewInviteInput) {
+      if (!input.inviteeId && !input.inviteeEmail) throw codedError('INVITEE_REQUIRED');
+      const existing = await query<ReportViewInviteRow>(
+        'SELECT * FROM report_view_invites WHERE view_id = ? AND ((invitee_id IS NOT NULL AND invitee_id = ?) OR (invitee_email IS NOT NULL AND LOWER(invitee_email) = LOWER(?))) LIMIT 1',
+        [input.viewId, input.inviteeId ?? '', input.inviteeEmail ?? '']
+      );
+      if (existing.length > 0) throw codedError('INVITE_ALREADY_EXISTS');
+      const id = newId();
+      const now = nowIso();
+      await query(
+        'INSERT INTO report_view_invites (id, view_id, inviter_id, invitee_id, invitee_email, invitee_name, role, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [id, input.viewId, input.inviterId, dbValue(input.inviteeId ?? null), dbValue(input.inviteeEmail ? input.inviteeEmail.toLowerCase() : null), input.inviteeName, input.role, 'pending', now, now]
+      );
+      const created = await query<ReportViewInviteRow>('SELECT * FROM report_view_invites WHERE id = ? LIMIT 1', [id]);
+      return toReportViewInvite(created[0]);
+    },
+    async updateStatus(viewId, inviteId, status, callerId, callerEmail) {
+      const rows = await query<ReportViewInviteRow>('SELECT * FROM report_view_invites WHERE id = ? AND view_id = ? LIMIT 1', [inviteId, viewId]);
+      if (!rows[0]) return null;
+      const invite = rows[0];
+      const isInvitee = (invite.invitee_id !== null && invite.invitee_id === callerId) || (invite.invitee_email !== null && callerEmail !== undefined && invite.invitee_email.toLowerCase() === callerEmail.toLowerCase());
+      const isOwner = invite.inviter_id === callerId;
+      if ((status === 'accepted' || status === 'declined') && !isInvitee) throw codedError('FORBIDDEN');
+      if (status === 'revoked' && !isOwner) throw codedError('FORBIDDEN');
+      const now = nowIso();
+      await query('UPDATE report_view_invites SET status = ?, updated_at = ? WHERE id = ?', [status, now, inviteId]);
+      const refreshed = await query<ReportViewInviteRow>('SELECT * FROM report_view_invites WHERE id = ? LIMIT 1', [inviteId]);
+      return toReportViewInvite(refreshed[0]);
+    },
+    async remove(viewId, inviteId, callerId) {
+      const rows = await query<ReportViewInviteRow>('SELECT * FROM report_view_invites WHERE id = ? AND view_id = ? LIMIT 1', [inviteId, viewId]);
+      if (!rows[0]) return false;
+      if (rows[0].inviter_id !== callerId) throw codedError('FORBIDDEN');
+      await query('UPDATE report_view_invites SET status = ?, updated_at = ? WHERE id = ?', ['revoked', nowIso(), inviteId]);
+      return true;
+    }
+  },
+  reportViewComments: {
+    async list(viewId, callerId, callerEmail, limit = 50) {
+      if (!(await canReadView(viewId, callerId, callerEmail))) throw codedError('FORBIDDEN');
+      const rows = await query<ReportViewCommentRow>('SELECT * FROM report_view_comments WHERE view_id = ? ORDER BY created_at ASC LIMIT ?', [viewId, limit]);
+      return rows.map(toReportViewComment);
+    },
+    async create(input: ReportViewCommentInput) {
+      const body = input.body.trim();
+      if (!body || body.length > 2000) throw codedError('COMMENT_BODY_REQUIRED');
+      const id = newId();
+      const now = nowIso();
+      await query(
+        'INSERT INTO report_view_comments (id, view_id, author_id, author_name, body, row_key, parent_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [id, input.viewId, input.authorId, input.authorName, body, dbValue(input.rowKey ?? null), dbValue(input.parentId ?? null), now, now]
+      );
+      const created = await query<ReportViewCommentRow>('SELECT * FROM report_view_comments WHERE id = ? LIMIT 1', [id]);
+      return toReportViewComment(created[0]);
+    },
+    async update(viewId, commentId, body, callerId) {
+      const rows = await query<ReportViewCommentRow>('SELECT * FROM report_view_comments WHERE id = ? AND view_id = ? LIMIT 1', [commentId, viewId]);
+      if (!rows[0]) return null;
+      if (rows[0].author_id !== callerId) throw codedError('FORBIDDEN');
+      const next = body.trim();
+      if (!next || next.length > 2000) throw codedError('COMMENT_BODY_REQUIRED');
+      const now = nowIso();
+      await query('UPDATE report_view_comments SET body = ?, updated_at = ? WHERE id = ?', [next, now, commentId]);
+      const refreshed = await query<ReportViewCommentRow>('SELECT * FROM report_view_comments WHERE id = ? LIMIT 1', [commentId]);
+      return toReportViewComment(refreshed[0]);
+    },
+    async delete(viewId, commentId, callerId) {
+      const rows = await query<ReportViewCommentRow>('SELECT * FROM report_view_comments WHERE id = ? AND view_id = ? LIMIT 1', [commentId, viewId]);
+      if (!rows[0]) return false;
+      if (rows[0].author_id !== callerId) throw codedError('FORBIDDEN');
+      await query('UPDATE report_view_comments SET body = ?, updated_at = ? WHERE id = ?', ['[deleted]', nowIso(), commentId]);
+      return true;
+    }
+  },
+  personFavorites: {
+    async list(userId, opts = {}) {
+      const conditions: string[] = ['user_id = ?'];
+      const params: Value[] = [userId];
+      if (opts.reportId) { conditions.push('report_id = ?'); params.push(opts.reportId); }
+      if (opts.organization) { conditions.push('organization = ?'); params.push(opts.organization); }
+      if (opts.search) {
+        conditions.push('(LOWER(person_name) LIKE ? OR LOWER(employee_number) LIKE ? OR LOWER(report_title) LIKE ?)');
+        const like = `%${opts.search.toLowerCase()}%`;
+        params.push(like, like, like);
+      }
+      const where = conditions.join(' AND ');
+      const countRows = await query<{ n: number }>(`SELECT COUNT(*) AS n FROM person_favorites WHERE ${where}`, params);
+      const total = countRows[0]?.n ?? 0;
+      const page = opts.page ?? 1;
+      const pageSize = opts.pageSize ?? 50;
+      const offset = (page - 1) * pageSize;
+      const rows = await query<PersonFavoriteRow>(`SELECT * FROM person_favorites WHERE ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`, [...params, pageSize, offset]);
+      return { data: rows.map(toPersonFavorite), total };
+    },
+    async create(userId, input: PersonFavoriteInput) {
+      const personId = input.personId.trim();
+      if (!personId) throw codedError('PERSON_ID_REQUIRED');
+      const existing = await query<{ id: string }>('SELECT id FROM person_favorites WHERE user_id = ? AND person_id = ? LIMIT 1', [userId, personId]);
+      if (existing.length > 0) throw codedError('FAVORITE_EXISTS');
+      const id = newId();
+      const now = nowIso();
+      await query(
+        'INSERT INTO person_favorites (id, user_id, person_id, employee_number, person_name, report_id, report_title, organization, row_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [id, userId, personId, input.employeeNumber.trim(), input.personName.trim(), dbValue(input.reportId ?? null), input.reportTitle.trim(), input.organization.trim(), dbValue(input.rowKey ?? null), now]
+      );
+      const created = await query<PersonFavoriteRow>('SELECT * FROM person_favorites WHERE id = ? LIMIT 1', [id]);
+      return toPersonFavorite(created[0]);
+    },
+    async delete(userId, favoriteId) {
+      const rows = await query<PersonFavoriteRow>('SELECT * FROM person_favorites WHERE id = ? AND user_id = ? LIMIT 1', [favoriteId, userId]);
+      if (!rows[0]) return false;
+      await query('DELETE FROM person_favorites WHERE id = ?', [favoriteId]);
+      return true;
+    },
+    async deleteByKey(userId, personId) {
+      const rows = await query<PersonFavoriteRow>('SELECT * FROM person_favorites WHERE user_id = ? AND person_id = ? LIMIT 1', [userId, personId]);
+      if (!rows[0]) return false;
+      await query('DELETE FROM person_favorites WHERE user_id = ? AND person_id = ?', [userId, personId]);
+      return true;
+    },
+    async check(userId, personIds) {
+      if (personIds.length === 0) return [];
+      const placeholders = personIds.map(() => '?').join(',');
+      const rows = await query<PersonFavoriteRow>(`SELECT * FROM person_favorites WHERE user_id = ? AND person_id IN (${placeholders})`, [userId, ...personIds] as unknown as Value[]);
+      const byPersonId = new Map(rows.map((row) => [String(row.person_id), row]));
+      return personIds.map((personId) => {
+        const row = byPersonId.get(personId);
+        return { personId, favorited: !!row, favoriteId: row ? String(row.id) : null };
+      });
+    }
+  }
+};
+
+type SectionRow = {
+  id: string;
+  title: string;
+  sort_order: number | null;
+  is_active: number | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  report_count?: number | null;
+};
+
+type ReportRow = {
+  id: string;
+  section_id: string;
+  title: string;
+  description: string | null;
+  sql_query: string | null;
+  status: string;
+  created_by: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  section_title?: string | null;
+  highlight_rules?: string | null;
+};
+
+function toSection(row: SectionRow): ReportSection {
+  return {
+    id: String(row.id),
+    title: row.title ?? '',
+    sortOrder: row.sort_order ?? 0,
+    isActive: (row.is_active ?? 1) === 1,
+    reportCount: row.report_count ?? undefined,
+    createdAt: row.created_at ?? undefined,
+    updatedAt: row.updated_at ?? undefined
+  };
+}
+
+function toReport(row: ReportRow): ReportDefinition {
+  return {
+    id: String(row.id),
+    sectionId: String(row.section_id),
+    sectionTitle: row.section_title ?? undefined,
+    title: row.title ?? '',
+    description: row.description ?? '',
+    sqlQuery: row.sql_query ?? undefined,
+    status: (row.status === 'active' ? 'active' : 'inactive'),
+    rowKeyColumn: (row as unknown as { row_key_column?: string | null }).row_key_column ?? null,
+    highlightRules: parseHighlightRules((row as ReportRow).highlight_rules),
+    createdBy: row.created_by ?? null,
+    createdAt: row.created_at ?? undefined,
+    updatedAt: row.updated_at ?? undefined
+  };
+}
+
+type ReportViewRow = {
+  id: string;
+  report_id: string;
+  organization: string;
+  owner_id: string;
+  owner_name: string;
+  name: string;
+  description: string | null;
+  visibility: string;
+  definition: string;
+  version: number;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+type ReportViewInviteRow = {
+  id: string;
+  view_id: string;
+  inviter_id: string;
+  invitee_id: string | null;
+  invitee_email: string | null;
+  invitee_name: string;
+  role: string;
+  status: string;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+type ReportViewCommentRow = {
+  id: string;
+  view_id: string;
+  author_id: string;
+  author_name: string;
+  body: string;
+  row_key: string | null;
+  parent_id: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+type PersonFavoriteRow = {
+  id: string;
+  user_id: string;
+  person_id: string;
+  employee_number: string | null;
+  person_name: string | null;
+  report_id: string | null;
+  report_title: string | null;
+  organization: string | null;
+  row_key: string | null;
+  created_at: string | null;
+};
+
+function toPersonFavorite(row: PersonFavoriteRow): PersonFavorite {
+  return {
+    id: String(row.id),
+    userId: String(row.user_id),
+    personId: String(row.person_id),
+    employeeNumber: String(row.employee_number ?? ''),
+    personName: String(row.person_name ?? ''),
+    reportId: row.report_id ? String(row.report_id) : null,
+    reportTitle: String(row.report_title ?? ''),
+    organization: String(row.organization ?? ''),
+    rowKey: row.row_key ?? null,
+    createdAt: String(row.created_at ?? '')
+  };
+}
+
+function toReportView(row: ReportViewRow): ReportView {
+  let definition: ViewDefinition;
+  try {
+    definition = JSON.parse(row.definition) as ViewDefinition;
+  } catch {
+    definition = { columnOrder: [], hiddenColumns: [], filterText: '', sort: null, highlights: [] };
+  }
+  return {
+    id: String(row.id),
+    reportId: String(row.report_id),
+    organization: String(row.organization),
+    ownerId: String(row.owner_id),
+    ownerName: String(row.owner_name),
+    name: String(row.name),
+    description: row.description ?? '',
+    visibility: (row.visibility === 'invite_only' ? 'invite_only' : 'private'),
+    definition,
+    version: row.version ?? 1,
+    createdAt: row.created_at ?? '',
+    updatedAt: row.updated_at ?? ''
+  };
+}
+
+function toReportViewInvite(row: ReportViewInviteRow): ReportViewInvite {
+  return {
+    id: String(row.id),
+    viewId: String(row.view_id),
+    inviterId: String(row.inviter_id),
+    inviteeId: row.invitee_id ?? null,
+    inviteeEmail: row.invitee_email ?? null,
+    inviteeName: String(row.invitee_name),
+    role: row.role as ReportViewInvite['role'],
+    status: row.status as ReportViewInvite['status'],
+    createdAt: row.created_at ?? '',
+    updatedAt: row.updated_at ?? ''
+  };
+}
+
+function toReportViewComment(row: ReportViewCommentRow): ReportViewComment {
+  return {
+    id: String(row.id),
+    viewId: String(row.view_id),
+    authorId: String(row.author_id),
+    authorName: String(row.author_name),
+    body: String(row.body),
+    rowKey: row.row_key ?? null,
+    parentId: row.parent_id ?? null,
+    createdAt: row.created_at ?? '',
+    updatedAt: row.updated_at ?? ''
+  };
+}
+
+async function canReadView(viewId: string, callerId: string, callerEmail?: string): Promise<boolean> {
+  const views = await query<ReportViewRow>('SELECT * FROM report_views WHERE id = ? LIMIT 1', [viewId]);
+  if (!views[0]) return false;
+  if (views[0].owner_id === callerId) return true;
+  const invites = await query<ReportViewInviteRow>(
+    'SELECT * FROM report_view_invites WHERE view_id = ? AND status = ?',
+    [viewId, 'accepted']
+  );
+  return invites.some(
+    (invite) =>
+      (invite.invitee_id !== null && invite.invitee_id === callerId) ||
+      (invite.invitee_email !== null && callerEmail !== undefined && invite.invitee_email.toLowerCase() === callerEmail.toLowerCase())
+  );
+}
+
+function codedError(code: string): Error {
+  return Object.assign(new Error(code), { code });
+}
+
+function buildRecord(
+  employee: EmployeeRow,
+  school: SchoolRow | undefined,
+  addressRow: AddressRow | undefined,
+  leaves: LeaveRow[],
+  certAreas: CertAreaRow[]
+): PersonRecord {
+  const identity = {
+    fullName: employee.full_name ?? '',
+    employeeNumber: String(employee.emp_number ?? ''),
+    ncUid: String(employee.person_id),
+    gender: employee.sex ?? '',
+    ethnicity: employee.ethnicity ?? '',
+    dateOfBirth: employee.dob ?? '',
+    email: employee.e_mail ?? '',
+    personalEmail: employee.personal_email ?? ''
+  };
+
+  const assignment = {
+    organizationId: school?.school_no ?? '',
+    organization: employee.organization ?? '',
+    classroom: employee.classroom_assignment ?? '',
+    months: employee.a_months ?? 0,
+    position: employee.pos_name ?? '',
+    accountCode: employee.account_code ?? '',
+    tapPercent: employee.tap ?? 0,
+    payGrade: employee.pay_grade ?? '',
+    group: employee.group1 ?? '',
+    mailStop: employee.mailstop ?? '',
+    schoolType: employee.loc_type ?? '',
+    supervisor: employee.Supervisor ?? ''
+  };
+
+  const compensation = {
+    step: employee.step !== null && employee.step !== undefined ? String(employee.step) : '',
+    proposedSalary: employee.proposed_salary ?? 0,
+    fixedSupplement: employee.fixed_supplement ?? 0,
+    offScale: employee.off_scale !== null && employee.off_scale !== undefined ? Number(employee.off_scale) : 0,
+    supplement: employee.supp_rate ?? 0,
+    tosState: employee.TOS_State ?? 0,
+    tosSupplement: employee.monthly_supplement ?? 0,
+    teacherDifferential: employee.AP_Teacher_Diff ?? 0
+  };
+
+  const contract = {
+    hireDate: employee.hire_date ?? '',
+    continuousDate: employee.continuous_service_date ?? '',
+    lastChanged: employee.last_change ?? '',
+    type: employee.contract_type ?? '',
+    start: employee.contract_start ?? '',
+    end: employee.contract_end ?? '',
+    renewalYear: employee.renewal_start ?? '',
+    changeType: employee.change_type ?? '',
+    boardNumber: employee.board_number ?? ''
+  };
+
+  const licensure = {
+    type: employee.certification_type ?? '',
+    renewalYear: employee.renewal_end ?? '',
+    expires: employee.license_expiration ?? '',
+    areas: certAreas.map((area) => ({
+      area: area.area ?? '',
+      description: area.area_description ?? '',
+      years: area.years !== null && area.years !== undefined ? String(area.years) : '',
+      status: area.status ?? '',
+      code: area.class ?? ''
+    }))
+  };
+
+  const service = {
+    yearsOfService: employee.years_of_serv ?? 0,
+    monthsOfService: employee.months_of_serv ?? 0,
+    lastUpdated: employee.last_updated ?? ''
+  };
+
+  const leaveBalances = leaves.map((leave) => ({
+    leaveType: leave.accrual_plan ?? '',
+    carryover: leave.Carryover ?? 0,
+    accrued: leave.SumOfytd_accrued ?? 0,
+    used: leave.SumOfytd_used ?? 0,
+    adjustment: leave.SumOfadjustments ?? 0,
+    balance: leave.ytd_accrual_balance ?? 0,
+    accrualRate: leave.MaxOfaccrual_rate ?? 0,
+    lastUpdated: leave.MaxOfperiod_end_date ?? ''
+  }));
+
+  return {
+    personId: String(employee.person_id),
+    identity,
+    contact: {
+      address: addressRow?.address ?? '',
+      city: addressRow?.city ?? '',
+      state: addressRow?.state ?? '',
+      zip: addressRow?.zip ?? '',
+      phone: addressRow?.phone ?? ''
+    },
+    assignment,
+    compensation,
+    contract,
+    licensure,
+    service,
+    leaveBalances
+  };
+}

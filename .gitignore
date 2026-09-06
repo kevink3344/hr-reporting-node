@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+
+# Logs and temporary / diagnostic artifacts
+*.log
+docs.json.tmp
+docs.json.tmp2
+*.tmp
+trace*.mjs
+audit-dark.mjs
+test-*.mjs

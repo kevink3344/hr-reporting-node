@@ -1,0 +1,652 @@
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import type {
+  GenericReportRun,
+  OpenPositionRow,
+  Person,
+  PersonFavorite,
+  PersonRecord,
+  ReportDefinition,
+  ReportSection,
+  ReportView,
+  ReportViewComment,
+  ReportViewInvite,
+  School,
+  ViewDefinition
+} from '../types.js';
+import type {
+  PersonFavoriteInput,
+  Repositories,
+  ReportDefinitionInput,
+  ReportDefinitionUpdate,
+  ReportListFilter,
+  ReportSectionInput,
+  ReportSectionUpdate,
+  ReportViewCommentInput,
+  ReportViewInput,
+  ReportViewInviteInput,
+  ReportViewListFilter,
+  ReportViewUpdate
+} from './contracts.js';
+import { REPORT_ROW_CAP, bindOrganization, newId, nowIso, validateReportSql } from '../reports-sql.js';
+import { parseHighlightRules, reportHighlightRulesSchema } from '../report-highlight.js';
+import { viewDefinitionSchema } from '../report-views.js';
+
+const dataDirectory = resolve(process.cwd(), 'docs', 'data');
+
+async function readFixture<T>(fileName: string): Promise<T[]> {
+  const contents = await readFile(resolve(dataDirectory, fileName), 'utf8');
+  return JSON.parse(contents) as T[];
+}
+
+// Synthetic Open Position rows matching the live schema shape, used for
+// offline/demo parity. Scoped by organization name (position_info.organization
+// === schools.school_name). Vacant positions have empty employee fields.
+const fixtureOpenPositions: OpenPositionRow[] = [
+  {
+    posStart: '2025-07-01', posEnding: '2026-06-30', posNumber: '1001', posName: 'Teacher',
+    organization: 'Test Oak Elementary', accountNumber: '01-5410-005-114-0109',
+    monthsAvailable: 10, monthsUsed: 8,
+    fullName: 'Example, Alex', employeeNumber: '900001', classroom: 'Room 111', mailstop: 'MS-11',
+    tenureCode: 'N Code', contractId: 'Regular', contractEnd: '2027-06-30', tap: '100', degree: 'MEd', nbptsExpire: '2030-06-30'
+  },
+  {
+    posStart: '2025-07-01', posEnding: '2026-06-30', posNumber: '1002', posName: 'Assistant Principal',
+    organization: 'Test Oak Elementary', accountNumber: '01-5410-005-114-0121',
+    monthsAvailable: 11, monthsUsed: 0,
+    fullName: '', employeeNumber: '', classroom: '', mailstop: '',
+    tenureCode: '', contractId: '', contractEnd: '', tap: '', degree: '', nbptsExpire: ''
+  },
+  {
+    posStart: '2025-07-01', posEnding: '2026-06-30', posNumber: '1003', posName: 'Principal',
+    organization: 'Test Oak Elementary', accountNumber: '01-5410-005-114-0122',
+    monthsAvailable: 12, monthsUsed: 12,
+    fullName: 'Sample, Jordan', employeeNumber: '900002', classroom: 'Room 112', mailstop: 'MS-12',
+    tenureCode: 'N Code', contractId: 'Regular', contractEnd: '2027-06-30', tap: '100', degree: 'EdD', nbptsExpire: ''
+  },
+  {
+    posStart: '2025-07-01', posEnding: '2026-06-30', posNumber: '1004', posName: 'Teacher',
+    organization: 'Test River High', accountNumber: '01-5410-005-114-0135',
+    monthsAvailable: 10, monthsUsed: 10,
+    fullName: 'Smith, Riley', employeeNumber: '900006', classroom: 'Room 116', mailstop: 'MS-16',
+    tenureCode: 'T Code', contractId: 'Regular', contractEnd: '2027-06-30', tap: '100', degree: '', nbptsExpire: ''
+  }
+];
+
+async function openPositions(organization: string): Promise<OpenPositionRow[]> {
+  return fixtureOpenPositions.filter((row) => row.organization === organization);
+}
+
+// ---------------------------------------------------------------------------
+// In-memory configurable reports seed (mirrors the legacy hard-coded catalog
+// so tests + offline demos run without a database).
+// ---------------------------------------------------------------------------
+
+const OPEN_POSITION_SQL_TURSO = `SELECT DISTINCT
+  pi.pos_start,
+  pi.pos_ending,
+  pi.pos_number,
+  pi.pos_name,
+  pi.organization,
+  COALESCE(pi.fund, '') || '-' || COALESCE(pi.purpose, '') || '-' ||
+    COALESCE(pi.program, '') || '-' || COALESCE(pi.object, '') || '-' ||
+    COALESCE(pi.level, '') || '-' || COALESCE(pi.cost_center, '') AS account_number,
+  pi.months,
+  e.a_months,
+  IFNULL(e.full_name, '') AS full_name,
+  IFNULL(e.emp_number, '') AS emp_number,
+  IFNULL(e.classroom_assignment, '') AS classroom_assignment,
+  IFNULL(e.mailstop, '') AS mailstop,
+  IFNULL(e.tenure_code, '') AS tenure_code,
+  IFNULL(e.contract_id, '') AS contract_id,
+  IFNULL(e.contract_end, '') AS contract_end,
+  IFNULL(e.tap, '') AS tap,
+  IFNULL(e.Degree, '') AS Degree,
+  IFNULL(e.nbpts_expire, '') AS nbpts_expire
+FROM position_info pi
+LEFT JOIN employee_info e
+  ON CAST(e.pos_number AS INTEGER) = pi.pos_number
+WHERE pi.organization = :organization
+ORDER BY pi.object, pi.pos_name`;
+
+type SeedReport = { id: string; title: string; description: string; status: 'active' | 'inactive'; sql: string };
+
+const seedSections: ReportSection[] = [
+  { id: 'section-person', title: 'Person', sortOrder: 1, isActive: true },
+  { id: 'section-certification', title: 'Certification and evaluation', sortOrder: 2, isActive: true },
+  { id: 'section-positions', title: 'Positions and leave', sortOrder: 3, isActive: true },
+  { id: 'section-staffing', title: 'Staffing and contracts', sortOrder: 4, isActive: true },
+  { id: 'section-future', title: 'Future Dated Reports', sortOrder: 5, isActive: true }
+];
+
+const seedReportsBySection: Record<string, SeedReport[]> = {
+  'section-person': [
+    { id: 'person-report', title: 'Person Report', description: 'Review employee assignments, contact details, and organization information.', status: 'inactive', sql: 'SELECT person_id, full_name, organization, pos_name FROM employee_info WHERE organization = :organization ORDER BY last_name, first_name' },
+    { id: 'person-report-xlsx', title: 'Person Report Excel', description: 'Export the person report as a spreadsheet.', status: 'inactive', sql: 'SELECT person_id, full_name, organization, pos_name FROM employee_info WHERE organization = :organization ORDER BY last_name, first_name' }
+  ],
+  'section-certification': [
+    { id: 'certification-report', title: 'Certification Report', description: 'Review certification status and renewal information.', status: 'inactive', sql: 'SELECT person_id, full_name, certification_type, license_expiration FROM employee_info WHERE organization = :organization ORDER BY full_name' },
+    { id: 'evaluation-planning-report', title: 'Evaluation Planning Report', description: 'Review evaluation planning information for assigned staff.', status: 'inactive', sql: 'SELECT person_id, full_name, organization FROM employee_info WHERE organization = :organization ORDER BY full_name' },
+    { id: 'evaluation-planning-xlsx', title: 'Evaluation Planning Excel', description: 'Export evaluation planning data as a spreadsheet.', status: 'inactive', sql: 'SELECT person_id, full_name, organization FROM employee_info WHERE organization = :organization ORDER BY full_name' }
+  ],
+  'section-positions': [
+    { id: 'open-position-report', title: 'Open Position Report', description: 'Review open positions and their assignment details.', status: 'active', sql: OPEN_POSITION_SQL_TURSO },
+    { id: 'leave-balance-report', title: 'Leave Balance Report', description: 'Review available leave balances by employee.', status: 'inactive', sql: 'SELECT person_id, accrual_plan, ytd_accrual_balance FROM leaves WHERE person_id IN (SELECT person_id FROM employee_info WHERE organization = :organization)' },
+    { id: 'leave-used-xlsx', title: 'Leave Used Report Excel', description: 'Export leave usage data as a spreadsheet.', status: 'inactive', sql: 'SELECT person_id, accrual_plan, SumOfytd_used FROM leaves WHERE person_id IN (SELECT person_id FROM employee_info WHERE organization = :organization)' }
+  ],
+  'section-staffing': [
+    { id: 'staff-planning-report', title: 'Staff Planning Report', description: 'Review current staffing and position planning data.', status: 'inactive', sql: 'SELECT person_id, full_name, pos_name, organization FROM employee_info WHERE organization = :organization ORDER BY full_name' },
+    { id: 'staff-planning-xlsx', title: 'Staff Planning Spreadsheet', description: 'Export staff planning data as a spreadsheet.', status: 'inactive', sql: 'SELECT person_id, full_name, pos_name, organization FROM employee_info WHERE organization = :organization ORDER BY full_name' },
+    { id: 'staff-report', title: 'Staff Report', description: 'Review staff assignments and contract information.', status: 'inactive', sql: 'SELECT person_id, full_name, contract_type, organization FROM employee_info WHERE organization = :organization ORDER BY full_name' },
+    { id: 'staff-xlsx', title: 'Staff Spreadsheet', description: 'Export staff assignment data as a spreadsheet.', status: 'inactive', sql: 'SELECT person_id, full_name, contract_type, organization FROM employee_info WHERE organization = :organization ORDER BY full_name' },
+    { id: 'contract-report', title: 'Contract Report', description: 'Review contract and renewal information.', status: 'inactive', sql: 'SELECT person_id, full_name, contract_type, contract_start, contract_end FROM employee_info WHERE organization = :organization ORDER BY full_name' },
+    { id: 'contract-xlsx', title: 'Contract Spreadsheet', description: 'Export contract data as a spreadsheet.', status: 'inactive', sql: 'SELECT person_id, full_name, contract_type, contract_start, contract_end FROM employee_info WHERE organization = :organization ORDER BY full_name' },
+    { id: 'extended-employment-list', title: 'Extended Employment List', description: 'Review extended employment positions and assignments.', status: 'inactive', sql: 'SELECT person_id, full_name, pos_name, organization FROM employee_info WHERE organization = :organization ORDER BY full_name' },
+    { id: 'extended-employment-xlsx', title: 'Extended Employment Spreadsheet', description: 'Export extended employment data as a spreadsheet.', status: 'inactive', sql: 'SELECT person_id, full_name, pos_name, organization FROM employee_info WHERE organization = :organization ORDER BY full_name' }
+  ],
+  'section-future': [
+    { id: 'future-evaluation-plan', title: 'Future Evaluation Plan', description: 'Review future-dated evaluation planning assignments.', status: 'inactive', sql: 'SELECT person_id, full_name, organization FROM employee_info WHERE organization = :organization ORDER BY full_name' },
+    { id: 'future-evaluation-plan-xlsx', title: 'Future Evaluation Plan Excel', description: 'Export future evaluation planning data as a spreadsheet.', status: 'inactive', sql: 'SELECT person_id, full_name, organization FROM employee_info WHERE organization = :organization ORDER BY full_name' },
+    { id: 'future-certification-report', title: 'Future Certification Report', description: 'Review future-dated certification and renewal information.', status: 'inactive', sql: 'SELECT person_id, full_name, certification_type FROM employee_info WHERE organization = :organization ORDER BY full_name' },
+    { id: 'future-staff-report', title: 'Future Staff Report', description: 'Review date-tracked future positions, assignments, and last-person details.', status: 'inactive', sql: 'SELECT person_id, full_name, pos_name, organization FROM employee_info WHERE organization = :organization ORDER BY full_name' },
+    { id: 'future-staff-xlsx', title: 'Future Staff Spreadsheet', description: 'Export future staff planning data as a spreadsheet.', status: 'inactive', sql: 'SELECT person_id, full_name, pos_name, organization FROM employee_info WHERE organization = :organization ORDER BY full_name' }
+  ]
+};
+
+function buildSeedState(): { sections: ReportSection[]; reports: ReportDefinition[] } {
+  const reports: ReportDefinition[] = [];
+  for (const section of seedSections) {
+    for (const seed of seedReportsBySection[section.id] ?? []) {
+      reports.push({
+        id: seed.id,
+        sectionId: section.id,
+        sectionTitle: section.title,
+        title: seed.title,
+        description: seed.description,
+        sqlQuery: seed.sql,
+        status: seed.status,
+        highlightRules: [],
+        createdBy: 'seed',
+        createdAt: '2026-09-05 00:00:00',
+        updatedAt: '2026-09-05 00:00:00'
+      });
+    }
+  }
+  return { sections: seedSections.map((section) => ({ ...section })), reports };
+}
+
+// Mutable in-memory store (reset per createApp call via fresh module state is
+// NOT possible, so tests share it — mutations in tests use unique titles).
+const fixtureSections: ReportSection[] = buildSeedState().sections;
+const fixtureReports: ReportDefinition[] = buildSeedState().reports;
+
+function sectionWithCount(section: ReportSection): ReportSection {
+  return { ...section, reportCount: fixtureReports.filter((report) => report.sectionId === section.id).length };
+}
+
+function titleConflict(sectionId: string, title: string, excludeId?: string): boolean {
+  const normalized = title.trim().toLowerCase();
+  return fixtureReports.some(
+    (report) => report.sectionId === sectionId && report.id !== excludeId && report.title.trim().toLowerCase() === normalized
+  );
+}
+
+function toOpenPositionRun(report: ReportDefinition, organization: string): GenericReportRun {
+  const rows = fixtureOpenPositions
+    .filter((row) => row.organization === organization)
+    .map((row) => ({ ...row }) as unknown as Record<string, unknown>);
+  const columns = rows.length > 0 ? Object.keys(rows[0]) : ['posStart', 'posName', 'organization'];
+  return {
+    report: { id: report.id, title: report.title, description: report.description, sectionTitle: report.sectionTitle, highlightRules: report.highlightRules },
+    organization,
+    columns,
+    rows: rows.slice(0, REPORT_ROW_CAP),
+    truncated: rows.length > REPORT_ROW_CAP
+  };
+}
+
+export const fixtureRepositories: Repositories = {
+  people: { list: () => readFixture<Person>('people.json') },
+  schools: { list: () => readFixture<School>('schools.json') },
+  personRecords: {
+    async getByPersonId(personId) {
+      const records = await readFixture<PersonRecord>('person-records.json');
+      return records.find((record) => record.personId === personId) ?? null;
+    }
+  },
+  reports: { openPositions },
+  reportSections: {
+    async list(includeInactive = false) {
+      const sections = (includeInactive ? fixtureSections : fixtureSections.filter((section) => section.isActive))
+        .slice()
+        .sort((a, b) => a.sortOrder - b.sortOrder || a.title.localeCompare(b.title));
+      return sections.map(sectionWithCount);
+    },
+    async getById(id) {
+      const section = fixtureSections.find((candidate) => candidate.id === id);
+      return section ? sectionWithCount(section) : null;
+    },
+    async create(input: ReportSectionInput) {
+      const title = input.title.trim();
+      if (!title) throw Object.assign(new Error('TITLE_REQUIRED'), { code: 'TITLE_REQUIRED' });
+      if (fixtureSections.some((section) => section.title.trim().toLowerCase() === title.toLowerCase())) {
+        throw Object.assign(new Error('SECTION_TITLE_CONFLICT'), { code: 'SECTION_TITLE_CONFLICT' });
+      }
+      const section: ReportSection = {
+        id: newId(),
+        title,
+        sortOrder: input.sortOrder ?? fixtureSections.length + 1,
+        isActive: input.isActive ?? true,
+        createdAt: nowIso(),
+        updatedAt: nowIso()
+      };
+      fixtureSections.push(section);
+      return sectionWithCount(section);
+    },
+    async update(id, patch: ReportSectionUpdate) {
+      const section = fixtureSections.find((candidate) => candidate.id === id);
+      if (!section) return null;
+      if (patch.title !== undefined) {
+        const title = patch.title.trim();
+        if (!title) throw Object.assign(new Error('TITLE_REQUIRED'), { code: 'TITLE_REQUIRED' });
+        if (fixtureSections.some((candidate) => candidate.id !== id && candidate.title.trim().toLowerCase() === title.toLowerCase())) {
+          throw Object.assign(new Error('SECTION_TITLE_CONFLICT'), { code: 'SECTION_TITLE_CONFLICT' });
+        }
+        section.title = title;
+        for (const report of fixtureReports.filter((candidate) => candidate.sectionId === id)) {
+          report.sectionTitle = title;
+        }
+      }
+      if (patch.sortOrder !== undefined) section.sortOrder = patch.sortOrder;
+      if (patch.isActive !== undefined) section.isActive = patch.isActive;
+      section.updatedAt = nowIso();
+      return sectionWithCount(section);
+    },
+    async delete(id) {
+      const index = fixtureSections.findIndex((candidate) => candidate.id === id);
+      if (index === -1) return { deleted: false, reason: 'NOT_FOUND' as const };
+      if (fixtureReports.some((report) => report.sectionId === id)) {
+        return { deleted: false, reason: 'HAS_REPORTS' as const };
+      }
+      fixtureSections.splice(index, 1);
+      return { deleted: true };
+    }
+  },
+  reportDefinitions: {
+    async list(filter: ReportListFilter = {}) {
+      let reports = fixtureReports.slice();
+      if (filter.sectionId) reports = reports.filter((report) => report.sectionId === filter.sectionId);
+      if (!filter.includeInactive) reports = reports.filter((report) => report.status === 'active');
+      return reports
+        .slice()
+        .sort((a, b) => a.title.localeCompare(b.title))
+        .map((report) => ({ ...report }));
+    },
+    async getById(id) {
+      const report = fixtureReports.find((candidate) => candidate.id === id);
+      return report ? { ...report } : null;
+    },
+    async create(input: ReportDefinitionInput) {
+      const title = input.title.trim();
+      if (!title) throw Object.assign(new Error('TITLE_REQUIRED'), { code: 'TITLE_REQUIRED' });
+      if (title.length > 150) throw Object.assign(new Error('TITLE_TOO_LONG'), { code: 'TITLE_TOO_LONG' });
+      const section = fixtureSections.find((candidate) => candidate.id === input.sectionId && candidate.isActive);
+      if (!section) throw Object.assign(new Error('SECTION_NOT_FOUND'), { code: 'SECTION_NOT_FOUND' });
+      if (titleConflict(input.sectionId, title)) {
+        throw Object.assign(new Error('REPORT_TITLE_CONFLICT'), { code: 'REPORT_TITLE_CONFLICT' });
+      }
+      const safety = validateReportSql(input.sqlQuery);
+      if (!safety.ok) throw Object.assign(new Error(safety.error), { code: safety.error });
+      if (input.highlightRules !== undefined) {
+        const parsed = reportHighlightRulesSchema.safeParse(input.highlightRules);
+        if (!parsed.success) throw Object.assign(new Error('HIGHLIGHT_RULE_INVALID'), { code: 'HIGHLIGHT_RULE_INVALID' });
+      }
+      const report: ReportDefinition = {
+        id: newId(),
+        sectionId: section.id,
+        sectionTitle: section.title,
+        title,
+        description: (input.description ?? '').trim(),
+        sqlQuery: input.sqlQuery.trim(),
+        status: input.status ?? 'inactive',
+        rowKeyColumn: input.rowKeyColumn ?? null,
+        highlightRules: input.highlightRules !== undefined ? (reportHighlightRulesSchema.parse(input.highlightRules) as ReportDefinition['highlightRules']) : [],
+        createdBy: input.createdBy ?? null,
+        createdAt: nowIso(),
+        updatedAt: nowIso()
+      };
+      fixtureReports.push(report);
+      return { ...report };
+    },
+    async update(id, patch: ReportDefinitionUpdate) {
+      const report = fixtureReports.find((candidate) => candidate.id === id);
+      if (!report) return null;
+      const nextSectionId = patch.sectionId ?? report.sectionId;
+      const section = fixtureSections.find((candidate) => candidate.id === nextSectionId && candidate.isActive);
+      if (!section) throw Object.assign(new Error('SECTION_NOT_FOUND'), { code: 'SECTION_NOT_FOUND' });
+      const nextTitle = (patch.title ?? report.title).trim();
+      if (!nextTitle) throw Object.assign(new Error('TITLE_REQUIRED'), { code: 'TITLE_REQUIRED' });
+      if (nextTitle.length > 150) throw Object.assign(new Error('TITLE_TOO_LONG'), { code: 'TITLE_TOO_LONG' });
+      if (titleConflict(nextSectionId, nextTitle, id)) {
+        throw Object.assign(new Error('REPORT_TITLE_CONFLICT'), { code: 'REPORT_TITLE_CONFLICT' });
+      }
+      if (patch.sqlQuery !== undefined) {
+        const safety = validateReportSql(patch.sqlQuery);
+        if (!safety.ok) throw Object.assign(new Error(safety.error), { code: safety.error });
+        report.sqlQuery = patch.sqlQuery.trim();
+      }
+      if (patch.highlightRules !== undefined) {
+        const parsed = reportHighlightRulesSchema.safeParse(patch.highlightRules);
+        if (!parsed.success) throw Object.assign(new Error('HIGHLIGHT_RULE_INVALID'), { code: 'HIGHLIGHT_RULE_INVALID' });
+        report.highlightRules = parsed.data as ReportDefinition['highlightRules'];
+      }
+      report.sectionId = section.id;
+      report.sectionTitle = section.title;
+      report.title = nextTitle;
+      if (patch.description !== undefined) report.description = patch.description.trim();
+      if (patch.status !== undefined) report.status = patch.status;
+      if (patch.rowKeyColumn !== undefined) report.rowKeyColumn = patch.rowKeyColumn;
+      report.updatedAt = nowIso();
+      return { ...report };
+    },
+    async delete(id) {
+      const index = fixtureReports.findIndex((candidate) => candidate.id === id);
+      if (index === -1) return false;
+      fixtureReports.splice(index, 1);
+      return true;
+    },
+    async countBySection(sectionId) {
+      return fixtureReports.filter((report) => report.sectionId === sectionId).length;
+    },
+    async run(id, organization) {
+      const report = fixtureReports.find((candidate) => candidate.id === id);
+      if (!report) return null;
+      // Fixture parity: the migrated open-position report serves synthetic
+      // rows; every other report validates SQL shape but returns empty rows
+      // until SQL-backed parity lands.
+      void bindOrganization(report.sqlQuery ?? '', organization);
+      if (report.id === 'open-position-report') {
+        return toOpenPositionRun(report, organization);
+      }
+      return {
+        report: { id: report.id, title: report.title, description: report.description, sectionTitle: report.sectionTitle },
+        organization,
+        columns: [],
+        rows: [],
+        truncated: false
+      };
+    },
+    async explain(sqlQuery) {
+      const safety = validateReportSql(sqlQuery);
+      if (!safety.ok) return safety;
+      return { ok: true };
+    }
+  },
+  reportViews: buildFixtureReportViews(),
+  reportViewInvites: buildFixtureReportViewInvites(),
+  reportViewComments: buildFixtureReportViewComments(),
+  personFavorites: buildFixturePersonFavorites()
+};
+
+function buildFixtureReportViews(): Repositories['reportViews'] {
+  const views: ReportView[] = [];
+  function canRead(view: ReportView, callerId: string, callerEmail?: string): boolean {
+    if (view.ownerId === callerId) return true;
+    return fixtureInvites.some(
+      (invite) =>
+        invite.viewId === view.id &&
+        invite.status === 'accepted' &&
+        ((invite.inviteeId !== null && invite.inviteeId === callerId) ||
+          (invite.inviteeEmail !== null && callerEmail !== undefined && invite.inviteeEmail.toLowerCase() === callerEmail.toLowerCase()))
+    );
+  }
+  return {
+    async list(filter: ReportViewListFilter) {
+      let result = views.filter((view) => canRead(view, filter.callerId, filter.callerEmail));
+      if (filter.reportId) result = result.filter((view) => view.reportId === filter.reportId);
+      if (filter.organization) result = result.filter((view) => view.organization === filter.organization);
+      return result.slice().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    },
+    async getById(id, callerId, callerEmail) {
+      const view = views.find((candidate) => candidate.id === id);
+      if (!view || !canRead(view, callerId, callerEmail)) return null;
+      return { ...view, definition: { ...view.definition, columnOrder: [...view.definition.columnOrder], hiddenColumns: [...view.definition.hiddenColumns], highlights: [...view.definition.highlights] } };
+    },
+    async create(input: ReportViewInput) {
+      const name = input.name.trim();
+      if (!name) throw Object.assign(new Error('VIEW_NAME_REQUIRED'), { code: 'VIEW_NAME_REQUIRED' });
+      if (name.length < 3 || name.length > 60) throw Object.assign(new Error('VIEW_NAME_REQUIRED'), { code: 'VIEW_NAME_REQUIRED' });
+      if (views.some((view) => view.ownerId === input.ownerId && view.reportId === input.reportId && view.organization === input.organization && view.name.toLowerCase() === name.toLowerCase())) {
+        throw Object.assign(new Error('VIEW_NAME_CONFLICT'), { code: 'VIEW_NAME_CONFLICT' });
+      }
+      const parsed = viewDefinitionSchema.safeParse(input.definition);
+      if (!parsed.success) throw Object.assign(new Error('VIEW_DEFINITION_INVALID'), { code: 'VIEW_DEFINITION_INVALID' });
+      const now = nowIso();
+      const view: ReportView = {
+        id: newId(),
+        reportId: input.reportId,
+        organization: input.organization,
+        ownerId: input.ownerId,
+        ownerName: input.ownerName,
+        name,
+        description: (input.description ?? '').trim().slice(0, 200),
+        visibility: input.visibility ?? 'private',
+        definition: parsed.data as ViewDefinition,
+        version: 1,
+        createdAt: now,
+        updatedAt: now
+      };
+      views.push(view);
+      return { ...view };
+    },
+    async update(id, patch, callerId) {
+      const view = views.find((candidate) => candidate.id === id);
+      if (!view) return null;
+      const isOwner = view.ownerId === callerId;
+      const editorInvite = fixtureInvites.find((invite) => invite.viewId === id && invite.inviteeId === callerId && invite.status === 'accepted' && invite.role === 'editor');
+      if (!isOwner && !editorInvite) throw Object.assign(new Error('FORBIDDEN'), { code: 'FORBIDDEN' });
+      if (patch.expectedVersion !== undefined && patch.expectedVersion !== view.version) {
+        throw Object.assign(new Error('VERSION_CONFLICT'), { code: 'VERSION_CONFLICT' });
+      }
+      if (patch.name !== undefined) {
+        const name = patch.name.trim();
+        if (!name || name.length < 3 || name.length > 60) throw Object.assign(new Error('VIEW_NAME_REQUIRED'), { code: 'VIEW_NAME_REQUIRED' });
+        if (views.some((candidate) => candidate.id !== id && candidate.ownerId === view.ownerId && candidate.reportId === view.reportId && candidate.organization === view.organization && candidate.name.toLowerCase() === name.toLowerCase())) {
+          throw Object.assign(new Error('VIEW_NAME_CONFLICT'), { code: 'VIEW_NAME_CONFLICT' });
+        }
+        view.name = name;
+      }
+      if (patch.description !== undefined) view.description = patch.description.trim().slice(0, 200);
+      if (patch.visibility !== undefined) {
+        if (!isOwner) throw Object.assign(new Error('FORBIDDEN'), { code: 'FORBIDDEN' });
+        view.visibility = patch.visibility;
+      }
+      if (patch.definition !== undefined) {
+        const parsed = viewDefinitionSchema.safeParse(patch.definition);
+        if (!parsed.success) throw Object.assign(new Error('VIEW_DEFINITION_INVALID'), { code: 'VIEW_DEFINITION_INVALID' });
+        view.definition = parsed.data as ViewDefinition;
+      }
+      view.version += 1;
+      view.updatedAt = nowIso();
+      return { ...view };
+    },
+    async delete(id, callerId) {
+      const index = views.findIndex((candidate) => candidate.id === id);
+      if (index === -1) return false;
+      if (views[index].ownerId !== callerId) throw Object.assign(new Error('FORBIDDEN'), { code: 'FORBIDDEN' });
+      views.splice(index, 1);
+      // Cascade: remove invites + comments for this view
+      for (let i = fixtureInvites.length - 1; i >= 0; i--) if (fixtureInvites[i].viewId === id) fixtureInvites.splice(i, 1);
+      for (let i = fixtureComments.length - 1; i >= 0; i--) if (fixtureComments[i].viewId === id) fixtureComments.splice(i, 1);
+      return true;
+    }
+  };
+}
+
+const fixtureInvites: ReportViewInvite[] = [];
+const fixtureComments: ReportViewComment[] = [];
+
+function buildFixtureReportViewInvites(): Repositories['reportViewInvites'] {
+  return {
+    async listByView(viewId, _callerId) {
+      return fixtureInvites.filter((invite) => invite.viewId === viewId).slice();
+    },
+    async listInbox(callerId, callerEmail, status) {
+      let result = fixtureInvites.filter(
+        (invite) =>
+          (invite.inviteeId !== null && invite.inviteeId === callerId) ||
+          (invite.inviteeEmail !== null && callerEmail !== undefined && invite.inviteeEmail.toLowerCase() === callerEmail.toLowerCase())
+      );
+      if (status) result = result.filter((invite) => invite.status === status);
+      return result.slice();
+    },
+    async create(input: ReportViewInviteInput) {
+      if (!input.inviteeId && !input.inviteeEmail) throw Object.assign(new Error('INVITEE_REQUIRED'), { code: 'INVITEE_REQUIRED' });
+      if (fixtureInvites.some((invite) => invite.viewId === input.viewId && ((input.inviteeId !== null && invite.inviteeId === input.inviteeId) || (input.inviteeEmail !== null && invite.inviteeEmail !== null && input.inviteeEmail !== undefined && invite.inviteeEmail.toLowerCase() === input.inviteeEmail.toLowerCase())))) {
+        throw Object.assign(new Error('INVITE_ALREADY_EXISTS'), { code: 'INVITE_ALREADY_EXISTS' });
+      }
+      const now = nowIso();
+      const invite: ReportViewInvite = {
+        id: newId(),
+        viewId: input.viewId,
+        inviterId: input.inviterId,
+        inviteeId: input.inviteeId ?? null,
+        inviteeEmail: input.inviteeEmail ? input.inviteeEmail.toLowerCase() : null,
+        inviteeName: input.inviteeName,
+        role: input.role,
+        status: 'pending',
+        createdAt: now,
+        updatedAt: now
+      };
+      fixtureInvites.push(invite);
+      return { ...invite };
+    },
+    async updateStatus(viewId, inviteId, status, callerId, callerEmail) {
+      const invite = fixtureInvites.find((candidate) => candidate.id === inviteId && candidate.viewId === viewId);
+      if (!invite) return null;
+      const isInvitee = (invite.inviteeId !== null && invite.inviteeId === callerId) || (invite.inviteeEmail !== null && callerEmail !== undefined && invite.inviteeEmail.toLowerCase() === callerEmail.toLowerCase());
+      const isOwner = invite.inviterId === callerId;
+      // Accept/decline: invitee only; revoke: owner only
+      if ((status === 'accepted' || status === 'declined') && !isInvitee) throw Object.assign(new Error('FORBIDDEN'), { code: 'FORBIDDEN' });
+      if (status === 'revoked' && !isOwner) throw Object.assign(new Error('FORBIDDEN'), { code: 'FORBIDDEN' });
+      invite.status = status;
+      invite.updatedAt = nowIso();
+      return { ...invite };
+    },
+    async remove(viewId, inviteId, callerId) {
+      const index = fixtureInvites.findIndex((candidate) => candidate.id === inviteId && candidate.viewId === viewId);
+      if (index === -1) return false;
+      if (fixtureInvites[index].inviterId !== callerId) throw Object.assign(new Error('FORBIDDEN'), { code: 'FORBIDDEN' });
+      fixtureInvites[index].status = 'revoked';
+      fixtureInvites[index].updatedAt = nowIso();
+      return true;
+    }
+  };
+}
+
+function buildFixtureReportViewComments(): Repositories['reportViewComments'] {
+  return {
+    async list(viewId, _callerId, _callerEmail, limit = 50) {
+      const rows = fixtureComments.filter((comment) => comment.viewId === viewId).slice().sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+      return rows.slice(0, limit).map((comment) => ({ ...comment }));
+    },
+    async create(input: ReportViewCommentInput) {
+      const body = input.body.trim();
+      if (!body || body.length > 2000) throw Object.assign(new Error('COMMENT_BODY_REQUIRED'), { code: 'COMMENT_BODY_REQUIRED' });
+      const now = nowIso();
+      const comment: ReportViewComment = {
+        id: newId(),
+        viewId: input.viewId,
+        authorId: input.authorId,
+        authorName: input.authorName,
+        body,
+        rowKey: input.rowKey ?? null,
+        parentId: input.parentId ?? null,
+        createdAt: now,
+        updatedAt: now
+      };
+      fixtureComments.push(comment);
+      return { ...comment };
+    },
+    async update(viewId, commentId, body, callerId) {
+      const comment = fixtureComments.find((candidate) => candidate.id === commentId && candidate.viewId === viewId);
+      if (!comment) return null;
+      if (comment.authorId !== callerId) throw Object.assign(new Error('FORBIDDEN'), { code: 'FORBIDDEN' });
+      const next = body.trim();
+      if (!next || next.length > 2000) throw Object.assign(new Error('COMMENT_BODY_REQUIRED'), { code: 'COMMENT_BODY_REQUIRED' });
+      comment.body = next;
+      comment.updatedAt = nowIso();
+      return { ...comment };
+    },
+    async delete(viewId, commentId, callerId) {
+      const comment = fixtureComments.find((candidate) => candidate.id === commentId && candidate.viewId === viewId);
+      if (!comment) return false;
+      if (comment.authorId !== callerId) throw Object.assign(new Error('FORBIDDEN'), { code: 'FORBIDDEN' });
+      comment.body = '[deleted]';
+      comment.updatedAt = nowIso();
+      return true;
+    }
+  };
+}
+
+const fixtureFavorites: PersonFavorite[] = [];
+
+function buildFixturePersonFavorites(): Repositories['personFavorites'] {
+  return {
+    async list(userId, opts = {}) {
+      let rows = fixtureFavorites.filter((fav) => fav.userId === userId);
+      if (opts.reportId) rows = rows.filter((fav) => fav.reportId === opts.reportId);
+      if (opts.organization) rows = rows.filter((fav) => fav.organization === opts.organization);
+      if (opts.search) {
+        const q = opts.search.toLowerCase();
+        rows = rows.filter((fav) => fav.personName.toLowerCase().includes(q) || fav.employeeNumber.toLowerCase().includes(q) || fav.reportTitle.toLowerCase().includes(q));
+      }
+      const total = rows.length;
+      rows = rows.slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+      const page = opts.page ?? 1;
+      const pageSize = opts.pageSize ?? 50;
+      const start = (page - 1) * pageSize;
+      return { data: rows.slice(start, start + pageSize).map((fav) => ({ ...fav })), total };
+    },
+    async create(userId, input: PersonFavoriteInput) {
+      const personId = input.personId.trim();
+      if (!personId) throw Object.assign(new Error('PERSON_ID_REQUIRED'), { code: 'PERSON_ID_REQUIRED' });
+      if (fixtureFavorites.some((fav) => fav.userId === userId && fav.personId === personId)) {
+        throw Object.assign(new Error('FAVORITE_EXISTS'), { code: 'FAVORITE_EXISTS' });
+      }
+      const now = nowIso();
+      const fav: PersonFavorite = {
+        id: newId(),
+        userId,
+        personId,
+        employeeNumber: input.employeeNumber.trim(),
+        personName: input.personName.trim(),
+        reportId: input.reportId ?? null,
+        reportTitle: input.reportTitle.trim(),
+        organization: input.organization.trim(),
+        rowKey: input.rowKey ?? null,
+        createdAt: now
+      };
+      fixtureFavorites.push(fav);
+      return { ...fav };
+    },
+    async delete(userId, favoriteId) {
+      const idx = fixtureFavorites.findIndex((fav) => fav.id === favoriteId && fav.userId === userId);
+      if (idx === -1) return false;
+      fixtureFavorites.splice(idx, 1);
+      return true;
+    },
+    async deleteByKey(userId, personId) {
+      const idx = fixtureFavorites.findIndex((fav) => fav.userId === userId && fav.personId === personId);
+      if (idx === -1) return false;
+      fixtureFavorites.splice(idx, 1);
+      return true;
+    },
+    async check(userId, personIds) {
+      return personIds.map((personId) => {
+        const fav = fixtureFavorites.find((candidate) => candidate.userId === userId && candidate.personId === personId);
+        return { personId, favorited: !!fav, favoriteId: fav?.id ?? null };
+      });
+    }
+  };
+}
