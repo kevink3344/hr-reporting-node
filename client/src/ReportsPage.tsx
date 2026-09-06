@@ -9,6 +9,7 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  Clock,
   Download,
   FileText,
   MessageSquare,
@@ -38,6 +39,8 @@ import { exportGenericReport } from './reportExport';
 import { exportGenericReportToPdf } from './reportPdf';
 import { SchoolCombobox } from './SchoolCombobox';
 import { loadLastReport, loadLastSchool, saveLastReport, saveLastSchool } from './lastRun';
+import { formatRelativeTime, loadRecentRuns, recordRecentRun } from './recentRuns';
+import type { RecentRun } from './recentRuns';
 import {
   applyFilter,
   applySort,
@@ -938,6 +941,7 @@ export function ReportsPage({ schools, session, onManage, onOpenRecord, favorite
   const [result, setResult] = useState<GenericReportRun | null>(null);
   const [reportLoading, setReportLoading] = useState(false);
   const [reportError, setReportError] = useState('');
+  const [recentRuns, setRecentRuns] = useState<RecentRun[]>(() => loadRecentRuns(session?.user.id ?? ''));
 
   const isAdmin = session?.user.roles.includes('hr_admin') ?? false;
   const selectedSchool = schools.find((school) => school.id === schoolId) ?? null;
@@ -995,6 +999,16 @@ export function ReportsPage({ schools, session, onManage, onOpenRecord, favorite
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeReport?.id, selectedSchool?.name]);
 
+  // Record each successful run into the user's recent-runs list (client v0).
+  useEffect(() => {
+    if (!result) return;
+    setRecentRuns(recordRecentRun(userId, {
+      reportId: result.report.id,
+      reportTitle: result.report.title,
+      organization: result.organization
+    }));
+  }, [result?.report.id, result?.organization, userId]);
+
   function openReport(reportDefinition: ReportDefinition) {
     setActiveReport(reportDefinition);
     setResult(null);
@@ -1003,6 +1017,18 @@ export function ReportsPage({ schools, session, onManage, onOpenRecord, favorite
 
   function backToCatalog() {
     setActiveReport(null);
+    setResult(null);
+    setReportError('');
+  }
+
+  // One-click re-run from the recent-runs strip: locate the report in the catalog
+  // (by id) and the school (by name), then open it with that school selected.
+  function runFromRecent(run: RecentRun) {
+    const definition = reports.find((report) => report.id === run.reportId);
+    if (!definition) return;
+    const school = schools.find((school) => school.name === run.organization);
+    if (school) setSchoolId(school.id);
+    setActiveReport(definition);
     setResult(null);
     setReportError('');
   }
@@ -1037,6 +1063,16 @@ export function ReportsPage({ schools, session, onManage, onOpenRecord, favorite
       />
       <label className="report-search"><Search size={18} aria-hidden="true" /><span className="sr-only">Filter reports</span><input placeholder="Filter reports" value={filter} onChange={(event) => setFilter(event.target.value)} /></label>
     </div>
+    {recentRuns.length > 0 && <div className="recent-runs" aria-label="Recently run">
+      <div className="recent-runs-title"><span className="recent-runs-icon"><Clock size={16} aria-hidden="true" /></span>Recently run</div>
+      <div className="recent-runs-strip">{recentRuns.map((run) => (
+        <button className="recent-run-chip" key={`${run.reportId}:${run.organization}`} onClick={() => runFromRecent(run)}>
+          <span className="recent-run-name">{run.reportTitle}</span>
+          <span className="recent-run-org">{run.organization}</span>
+          <span className="recent-run-meta">{formatRelativeTime(run.ranAt)}</span>
+        </button>
+      ))}</div>
+    </div>}
     {catalogError && <div className="notice error"><AlertCircle size={18} /><span>{catalogError}</span></div>}
     {catalogLoading
       ? <div className="empty-state"><span className="loader" />Loading reports</div>
