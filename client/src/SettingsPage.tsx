@@ -82,7 +82,7 @@ function SectionsTab({ session, sections, refresh }: { session: LoginSession; se
       <button className="export-button" onClick={() => void addSection()} disabled={!title.trim()}><Plus size={17} />Add section</button>
     </div>
     <div className="settings-table-wrap">
-      <table className="report-table">
+      <table className="report-table sections-table">
         <thead><tr><th>Title</th><th>Reports</th><th>Order</th><th>Status</th><th>Actions</th></tr></thead>
         <tbody>{sections.map((section) => <tr key={section.id} className="report-card">
           <td data-label="Title">{editingId === section.id
@@ -507,8 +507,8 @@ export function SettingsPage({ session, schools }: { session: LoginSession; scho
     </div>
     {error && <div className="notice error"><AlertCircle size={18} /><span>{error}</span></div>}
     <div className="settings-tabs" role="tablist">
-      <button role="tab" aria-selected={tab === 'sections'} className={tab === 'sections' ? 'settings-tab active' : 'settings-tab'} onClick={() => setTab('sections')}>Sections ({sections.length})</button>
       <button role="tab" aria-selected={tab === 'reports'} className={tab === 'reports' ? 'settings-tab active' : 'settings-tab'} onClick={() => setTab('reports')}>Reports ({reports.length})</button>
+      <button role="tab" aria-selected={tab === 'sections'} className={tab === 'sections' ? 'settings-tab active' : 'settings-tab'} onClick={() => setTab('sections')}>Sections ({sections.length})</button>
     </div>
     {tab === 'sections'
       ? <SectionsTab session={session} sections={sections} refresh={refresh} />

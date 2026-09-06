@@ -132,6 +132,7 @@ h1, h2, h3, p { margin-top: 0; } h1 { margin-bottom: 0; font-size: 17px; } h2 { 
 .settings-table-wrap { overflow-x: auto; border: 1px solid #e3e7e2; border-radius: 10px; background: #fff; }
 .settings-table-wrap .report-table { width: 100%; table-layout: fixed; }
 .settings-table-wrap .report-table th, .settings-table-wrap .report-table td { overflow-wrap: anywhere; word-break: break-word; }
+.settings-table-wrap .report-table.sections-table td:first-child span { font-size: 14px; color: #26231f; font-weight: 600; }
 .settings-table-wrap .report-table th:last-child, .settings-table-wrap .report-table td:last-child { width: 150px; white-space: nowrap; }
 .settings-table-wrap .report-table th:nth-last-child(2), .settings-table-wrap .report-table td:nth-last-child(2) { width: 92px; white-space: nowrap; }
 .settings-table-wrap .report-table:has(thead th:nth-child(5)) th:nth-child(2), .settings-table-wrap .report-table:has(thead th:nth-child(5)) td:nth-child(2) { width: 78px; }
