@@ -36,6 +36,8 @@ import {
 } from './api';
 import { exportGenericReport } from './reportExport';
 import { exportGenericReportToPdf } from './reportPdf';
+import { SchoolCombobox } from './SchoolCombobox';
+import { loadLastReport, loadLastSchool, saveLastReport, saveLastSchool } from './lastRun';
 import {
   applyFilter,
   applySort,
@@ -939,13 +941,27 @@ export function ReportsPage({ schools, session, onManage, onOpenRecord, favorite
 
   const isAdmin = session?.user.roles.includes('hr_admin') ?? false;
   const selectedSchool = schools.find((school) => school.id === schoolId) ?? null;
+  const userId = session?.user.id ?? '';
 
-  // Default to the first school when the list loads (a school is required before a report can run).
+  // Default to the user's last school (a school is required before a report can run).
+  // Prefer the saved school when it still exists in the list; otherwise first school.
   useEffect(() => {
     if (!schoolId && schools.length > 0) {
-      setSchoolId(schools[0].id);
+      const saved = loadLastSchool(userId);
+      const savedSchool = saved ? schools.find((school) => school.id === saved) : null;
+      setSchoolId(savedSchool?.id ?? schools[0].id);
     }
-  }, [schools, schoolId]);
+  }, [schools, schoolId, userId]);
+
+  // Persist the school selection per user.
+  useEffect(() => {
+    if (schoolId) saveLastSchool(userId, schoolId);
+  }, [schoolId, userId]);
+
+  // Persist the newly-opened report per user.
+  useEffect(() => {
+    if (activeReport) saveLastReport(userId, activeReport.id);
+  }, [activeReport, userId]);
 
   useEffect(() => {
     setCatalogLoading(true);
@@ -1011,15 +1027,14 @@ export function ReportsPage({ schools, session, onManage, onOpenRecord, favorite
     </div>
     {isAdmin && onManage && <div className="notice"><Settings size={18} /><span>Admins configure sections and reports under Settings.</span><button className="back-button" onClick={onManage}>Manage in Settings</button></div>}
     <div className="report-toolbar">
-      <label className="select-field report-school-select">
-        <Building2 size={17} aria-hidden="true" />
-        <span className="sr-only">Select school</span>
-        <select value={schoolId} onChange={(event) => setSchoolId(event.target.value)} aria-label="Select school">
-          <option value="">Select a school…</option>
-          {schools.map((school) => <option key={school.id} value={school.id}>{school.name}</option>)}
-        </select>
-        <ChevronDown size={15} aria-hidden="true" />
-      </label>
+      <SchoolCombobox
+        schools={schools}
+        value={schoolId}
+        onChange={setSchoolId}
+        emptyLabel="Select a school…"
+        ariaLabel="Select school"
+        leadingIcon={<Building2 size={17} aria-hidden="true" />}
+      />
       <label className="report-search"><Search size={18} aria-hidden="true" /><span className="sr-only">Filter reports</span><input placeholder="Filter reports" value={filter} onChange={(event) => setFilter(event.target.value)} /></label>
     </div>
     {catalogError && <div className="notice error"><AlertCircle size={18} /><span>{catalogError}</span></div>}
