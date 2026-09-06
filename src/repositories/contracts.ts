@@ -61,6 +61,9 @@ export type ReportDefinitionInput = {
   status?: ReportStatus;
   rowKeyColumn?: string | null;
   highlightRules?: unknown;
+  subreportQuery?: string;
+  subreportKeyColumn?: string | null;
+  columns?: string[];
   createdBy?: string;
 };
 
@@ -72,6 +75,9 @@ export type ReportDefinitionUpdate = {
   status?: ReportStatus;
   rowKeyColumn?: string | null;
   highlightRules?: unknown;
+  subreportQuery?: string;
+  subreportKeyColumn?: string | null;
+  columns?: string[];
 };
 
 export type ReportListFilter = {

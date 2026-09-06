@@ -123,6 +123,9 @@ export type ReportDefinition = {
   status: ReportStatus;
   rowKeyColumn?: string | null;
   highlightRules?: ReportHighlightRule[];
+  subreportQuery?: string;
+  subreportKeyColumn?: string | null;
+  columns?: string[];
   createdBy?: string | null;
   createdAt?: string;
   updatedAt?: string;
@@ -130,11 +133,23 @@ export type ReportDefinition = {
 
 export type GenericReportRow = Record<string, unknown>;
 
+export type GenericSubreportRun = {
+  keyColumn: string;
+  columns: string[];
+  rows: GenericReportRow[];
+  truncated: boolean;
+};
+
+export type GenericReportRowWithSubreport = GenericReportRow & {
+  __subreport?: GenericSubreportRun;
+};
+
 export type GenericReportRun = {
   report: { id: string; title: string; description: string; sectionTitle?: string; highlightRules?: ReportHighlightRule[] };
   organization: string;
   columns: string[];
-  rows: GenericReportRow[];
+  rows: GenericReportRowWithSubreport[];
+  subreport?: { keyColumn: string } | null;
   truncated: boolean;
 };
 

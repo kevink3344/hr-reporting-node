@@ -601,6 +601,9 @@ export const openApiDocument = {
           status: { type: 'string', enum: ['active', 'inactive'] },
           rowKeyColumn: { type: 'string', nullable: true, description: 'Declared stable row key column for view highlights/comments' },
           highlightRules: { type: 'array', items: { $ref: '#/components/schemas/ReportHighlightRule' }, description: 'Admin-configured conditional row highlighting (first match wins)' },
+          subreportQuery: { type: 'string', description: 'Optional child (subreport) query. Only returned to admins' },
+          subreportKeyColumn: { type: 'string', nullable: true, description: 'Main-row column bound to the subreport :person_id' },
+          columns: { type: 'array', items: { type: 'string' }, description: 'Optional curated MAIN display columns (defaults to driver columns)' },
           createdBy: { type: 'string' },
           createdAt: { type: 'string' },
           updatedAt: { type: 'string' }
@@ -616,13 +619,26 @@ export const openApiDocument = {
           sqlQuery: { type: 'string', description: 'Single SELECT with a :organization bind parameter' },
           status: { type: 'string', enum: ['active', 'inactive'] },
           rowKeyColumn: { type: 'string', nullable: true, description: 'Declared stable row key column' },
-          highlightRules: { type: 'array', items: { $ref: '#/components/schemas/ReportHighlightRule' }, maxItems: 10 }
+          highlightRules: { type: 'array', items: { $ref: '#/components/schemas/ReportHighlightRule' }, maxItems: 10 },
+          subreportQuery: { type: 'string', description: 'Optional child (subreport) query with a :person_id bind' },
+          subreportKeyColumn: { type: 'string', nullable: true, description: 'Main-row column bound to the subreport :person_id' },
+          columns: { type: 'array', items: { type: 'string' }, maxItems: 200, description: 'Curated MAIN display columns (omit person_id to hide it)' }
         }
       },
       ValidateSqlRequest: {
         type: 'object',
         required: ['sqlQuery'],
         properties: { sqlQuery: { type: 'string' } }
+      },
+      ReportSubreportRun: {
+        type: 'object',
+        required: ['keyColumn', 'columns', 'rows', 'truncated'],
+        properties: {
+          keyColumn: { type: 'string' },
+          columns: { type: 'array', items: { type: 'string' } },
+          rows: { type: 'array', items: { type: 'object', additionalProperties: true } },
+          truncated: { type: 'boolean' }
+        }
       },
       ReportRunResult: {
         type: 'object',
@@ -632,6 +648,7 @@ export const openApiDocument = {
           organization: { type: 'string' },
           columns: { type: 'array', items: { type: 'string' } },
           rows: { type: 'array', items: { type: 'object', additionalProperties: true } },
+          subreport: { type: 'object', nullable: true, properties: { keyColumn: { type: 'string' } }, description: 'Present when the report has a nested subreport' },
           truncated: { type: 'boolean' }
         }
       },

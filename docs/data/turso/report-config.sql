@@ -40,6 +40,15 @@ CREATE INDEX IF NOT EXISTS idx_reports_status ON reports (status);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_reports_section_title ON reports (section_id, title);
 
 -- ---------------------------------------------------------------------
+-- Subreport support (main report + child report). Added as one-time ALTER
+-- TABLE statements so they work on both fresh and pre-existing databases.
+-- Re-apply is expected to be run once per environment.
+-- ---------------------------------------------------------------------
+ALTER TABLE reports ADD COLUMN subreport_query TEXT;
+ALTER TABLE reports ADD COLUMN subreport_key_column TEXT;
+ALTER TABLE reports ADD COLUMN columns TEXT NOT NULL DEFAULT '[]';
+
+-- ---------------------------------------------------------------------
 -- Seed: migrate the 5 legacy catalog section titles + 21 catalog entries.
 -- Only open-position-report seeds as active; everything else is inactive
 -- until an admin authors SQL for it and flips it active in Settings.
@@ -88,7 +97,6 @@ ORDER BY pi.object, pi.pos_name',
 INSERT OR IGNORE INTO reports (id, section_id, title, description, sql_query, status, created_by) VALUES
 ('person-report', 'section-person', 'Person Report', 'Review employee assignments, contact details, and organization information.', 'SELECT person_id, full_name, organization, pos_name FROM employee_info WHERE organization = :organization ORDER BY last_name, first_name', 'inactive', 'seed'),
 ('person-report-xlsx', 'section-person', 'Person Report Excel', 'Export the person report as a spreadsheet.', 'SELECT person_id, full_name, organization, pos_name FROM employee_info WHERE organization = :organization ORDER BY last_name, first_name', 'inactive', 'seed'),
-('certification-report', 'section-certification', 'Certification Report', 'Review certification status and renewal information.', 'SELECT person_id, full_name, certification_type, license_expiration FROM employee_info WHERE organization = :organization ORDER BY full_name', 'inactive', 'seed'),
 ('evaluation-planning-report', 'section-certification', 'Evaluation Planning Report', 'Review evaluation planning information for assigned staff.', 'SELECT person_id, full_name, organization FROM employee_info WHERE organization = :organization ORDER BY full_name', 'inactive', 'seed'),
 ('evaluation-planning-xlsx', 'section-certification', 'Evaluation Planning Excel', 'Export evaluation planning data as a spreadsheet.', 'SELECT person_id, full_name, organization FROM employee_info WHERE organization = :organization ORDER BY full_name', 'inactive', 'seed'),
 ('leave-balance-report', 'section-positions', 'Leave Balance Report', 'Review available leave balances by employee.', 'SELECT person_id, accrual_plan, ytd_accrual_balance FROM leaves WHERE person_id IN (SELECT person_id FROM employee_info WHERE organization = :organization)', 'inactive', 'seed'),
@@ -106,3 +114,31 @@ INSERT OR IGNORE INTO reports (id, section_id, title, description, sql_query, st
 ('future-certification-report', 'section-future', 'Future Certification Report', 'Review future-dated certification and renewal information.', 'SELECT person_id, full_name, certification_type FROM employee_info WHERE organization = :organization ORDER BY full_name', 'inactive', 'seed'),
 ('future-staff-report', 'section-future', 'Future Staff Report', 'Review date-tracked future positions, assignments, and last-person details.', 'SELECT person_id, full_name, pos_name, organization FROM employee_info WHERE organization = :organization ORDER BY full_name', 'inactive', 'seed'),
 ('future-staff-xlsx', 'section-future', 'Future Staff Spreadsheet', 'Export future staff planning data as a spreadsheet.', 'SELECT person_id, full_name, pos_name, organization FROM employee_info WHERE organization = :organization ORDER BY full_name', 'inactive', 'seed');
+
+-- ---------------------------------------------------------------------
+-- Certification Report (main + subreport). Active. The main query keeps
+-- person_id in the result for the subreport key but omits it from the
+-- curated display columns; the subreport drives the child cert_area rows.
+-- ---------------------------------------------------------------------
+INSERT OR REPLACE INTO reports
+  (id, section_id, title, description, sql_query, status, subreport_query,
+   subreport_key_column, columns, created_by)
+VALUES
+('certification-report', 'section-certification', 'Certification Report',
+ 'Review certification status and renewal information (main report with subreport).',
+ 'SELECT person_id, full_name, title AS assignment, certification_type AS track, tap AS pct,
+  classroom_assignment AS classroom, pos_name AS position_name,
+  pos_number AS position_no, a_months AS mos, contract_id AS contract_renewal,
+  contract_type AS contract_type, tenure_desc AS contract_desc,
+  contract_end AS contract_end, license_expiration AS expires,
+  renewal_start AS renewal_cycle_start, renewal_end AS renewal_cycle_end,
+  nbpts_expire AS nbpts_expires
+ FROM employee_info
+ WHERE organization = :organization AND CAST(object AS INTEGER) < 140 AND primary_flag = ''Y''
+ ORDER BY cost_center, object, full_name',
+ 'active',
+ 'SELECT DISTINCT area, area_description AS area_desc, years, '''' AS program, NCLB AS nclb_code
+  FROM cert_area WHERE person_id = :person_id ORDER BY area',
+ 'person_id',
+ '["full_name","assignment","track","classroom","position_name","position_no","contract_renewal","contract_type","contract_desc","contract_end","expires","renewal_cycle_start","renewal_cycle_end","nbpts_expires"]',
+ 'seed');

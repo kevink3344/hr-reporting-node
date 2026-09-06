@@ -45,9 +45,10 @@ export async function exportGenericReportToPdf(run: {
   report: { title: string; sectionTitle?: string };
   organization: string;
   columns: string[];
-  rows: Record<string, unknown>[];
+  rows: (Record<string, unknown> & { __subreport?: { keyColumn: string; columns: string[]; rows: Record<string, unknown>[] } })[];
   truncated?: boolean;
   highlightRules?: { column: string; operator: string; value: string; color: string }[];
+  subreport?: { keyColumn: string } | null;
 }): Promise<void> {
   const { jsPDF } = await import('jspdf');
   const { default: autoTable } = await import('jspdf-autotable');
@@ -89,8 +90,9 @@ export async function exportGenericReportToPdf(run: {
     }),
   );
 
+  const mainTableY = metaY + 4;
   autoTable(doc, {
-    startY: metaY + 4,
+    startY: mainTableY,
     head,
     body,
     theme: 'grid',
@@ -115,6 +117,50 @@ export async function exportGenericReportToPdf(run: {
       doc.text(str, pageW / 2, pageH - 6, { align: 'center' });
     },
   });
+  const afterMainY = (doc as unknown as { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? mainTableY + 8;
+
+  // Append a "Certification Details" subreport block (one row per child).
+  if (run.subreport) {
+    const keyColumn = run.subreport.keyColumn;
+    const firstSub = run.rows.find((row) => row.__subreport && row.__subreport.rows.length > 0)?.__subreport;
+    const subColumns = firstSub?.columns ?? [];
+    const subHead = [keyColumn, ...subColumns];
+    const subBody: (string)[][] = [];
+    for (const row of run.rows) {
+      const sub = row.__subreport;
+      if (!sub || sub.rows.length === 0) continue;
+      const parentKey = String(row[keyColumn] ?? '');
+      for (const child of sub.rows) {
+        subBody.push([parentKey, ...subColumns.map((col) => {
+          const v = child[col];
+          return v === null || v === undefined ? '' : String(v);
+        })]);
+      }
+    }
+    if (subBody.length > 0) {
+      doc.setFontSize(9);
+      doc.setTextColor(46, 94, 86);
+      doc.setFont('helvetica', 'bold');
+      doc.text('Certification Details (subreport)', margin, afterMainY + 6);
+      autoTable(doc, {
+        startY: afterMainY + 8,
+        head: [subHead],
+        body: subBody,
+        theme: 'grid',
+        styles: { fontSize: 7, cellPadding: 2, overflow: 'linebreak', valign: 'middle' },
+        headStyles: { fillColor: [139, 107, 62], textColor: 255, fontStyle: 'bold', fontSize: 6.5 },
+        alternateRowStyles: { fillColor: [247, 243, 235] },
+        margin: { left: margin, right: margin, top: margin, bottom: 12 },
+        didDrawPage(data) {
+          const str = `Page ${data.pageNumber}  •  Confidential — HR Reporting  •  ${today}`;
+          doc.setFontSize(6.5);
+          doc.setTextColor(140, 133, 122);
+          doc.setFont('helvetica', 'normal');
+          doc.text(str, pageW / 2, pageH - 6, { align: 'center' });
+        },
+      });
+    }
+  }
 
   const slug = sanitizeFilename(run.report.title.toLowerCase());
   const org = sanitizeFilename(run.organization);

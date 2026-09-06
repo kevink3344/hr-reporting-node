@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { AlertCircle, Archive, CheckCircle2, GripVertical, Pencil, Play, Plus, Trash2, X } from 'lucide-react';
 import { createReport, createReportSection, getReports, getReportSections, runReport, updateReport, updateReportSection, validateReportSql } from './api';
-import type { HighlightColorId, HighlightOperator, LoginSession, ReportDefinition, ReportHighlightRule, ReportSection, School } from './types';
+import type { GenericReportRowWithSubreport, GenericSubreportRun, HighlightColorId, HighlightOperator, LoginSession, ReportDefinition, ReportHighlightRule, ReportSection, School } from './types';
 import { HIGHLIGHT_PALETTE, resolveHighlightNeedle } from './types';
 
 type Tab = 'sections' | 'reports';
@@ -22,6 +22,7 @@ function errorMessage(failure: unknown, fallback: string): string {
       case 'MULTI_STATEMENT_NOT_ALLOWED': return 'Multiple statements are not allowed.';
       case 'FORBIDDEN_KEYWORD': return 'The query uses a forbidden keyword (e.g. INSERT, UPDATE, DELETE, DROP).';
       case 'ORGANIZATION_SCOPE_REQUIRED': return 'The query must reference the :organization bind parameter.';
+      case 'SUBREPORT_SCOPE_REQUIRED': return 'The subreport query must reference the :person_id bind parameter.';
       default: return failure.message.startsWith('HTTP_') ? fallback : failure.message;
     }
   }
@@ -215,6 +216,32 @@ function RowHighlightingEditor({
   </div>;
 }
 
+function SubreportPreviewCells({ sub, colSpan }: { sub?: GenericSubreportRun | null; colSpan: number }) {
+  if (!sub || sub.rows.length === 0) return null;
+  return (
+    <tr className="report-subreport-row">
+      <td colSpan={colSpan}>
+        <table className="report-subreport-table">
+          <thead>
+            <tr>{sub.columns.map((col) => (<th key={col}>{col}</th>))}</tr>
+          </thead>
+          <tbody>
+            {sub.rows.map((childRow, childIndex) => (
+              <tr key={childIndex}>
+                {sub.columns.map((col) => (
+                  <td key={col} data-label={col}>
+                    {childRow[col] === null || childRow[col] === undefined ? '' : String(childRow[col])}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </td>
+    </tr>
+  );
+}
+
 function ReportsTab({ session, schools, sections, reports, refresh }: { session: LoginSession; schools: School[]; sections: ReportSection[]; reports: ReportDefinition[]; refresh: () => Promise<void> }) {
   const [filter, setFilter] = useState('');
   const [editing, setEditing] = useState<Partial<ReportDefinition> & { id?: string } | null>(null);
@@ -223,7 +250,7 @@ function ReportsTab({ session, schools, sections, reports, refresh }: { session:
   const [error, setError] = useState('');
   const [validateState, setValidateState] = useState<'idle' | 'ok' | 'fail'>('idle');
   const [previewOrg, setPreviewOrg] = useState(schools[0]?.name ?? '');
-  const [preview, setPreview] = useState<{ columns: string[]; rows: Record<string, unknown>[] } | null>(null);
+  const [preview, setPreview] = useState<{ columns: string[]; rows: GenericReportRowWithSubreport[]; subreport?: { keyColumn: string } | null } | null>(null);
 
   const visible = useMemo(() => {
     const needle = filter.trim().toLowerCase();
@@ -232,7 +259,7 @@ function ReportsTab({ session, schools, sections, reports, refresh }: { session:
   }, [reports, filter]);
 
   function startNew() {
-    setEditing({ sectionId: sections[0]?.id ?? '', title: '', description: '', sqlQuery: 'SELECT 1 AS example WHERE :organization = :organization', status: 'inactive', highlightRules: [] });
+    setEditing({ sectionId: sections[0]?.id ?? '', title: '', description: '', sqlQuery: 'SELECT 1 AS example WHERE :organization = :organization', status: 'inactive', highlightRules: [], subreportQuery: '', subreportKeyColumn: 'person_id', columns: [] });
     setEditorTab('general');
     setValidateState('idle');
     setPreview(null);
@@ -241,7 +268,7 @@ function ReportsTab({ session, schools, sections, reports, refresh }: { session:
   }
 
   function startEdit(report: ReportDefinition) {
-    setEditing({ ...report, highlightRules: report.highlightRules ?? [] });
+    setEditing({ ...report, highlightRules: report.highlightRules ?? [], subreportQuery: report.subreportQuery ?? '', subreportKeyColumn: report.subreportKeyColumn ?? 'person_id', columns: report.columns ?? [] });
     setEditorTab('general');
     setValidateState('idle');
     setPreview(null);
@@ -269,6 +296,10 @@ function ReportsTab({ session, schools, sections, reports, refresh }: { session:
       if (!needsValue && r.value.trim()) { setError(`Rule for "${r.column}" must have an empty value for "${r.operator}".`); setEditorTab('options'); return; }
     }
     if (rules.length > 10) { setError('At most 10 highlight rules are allowed.'); setEditorTab('options'); return; }
+    // Normalize subreport fields (blank query => no subreport).
+    const subreportQuery = (editing.subreportQuery ?? '').trim();
+    const subreportKeyColumn = subreportQuery ? (editing.subreportKeyColumn ?? 'person_id').trim() || null : null;
+    const columns = (editing.columns ?? []).filter((c) => c.trim()).length > 0 ? (editing.columns ?? []).filter((c) => c.trim()) : undefined;
     try {
       if (editing.id) {
         await updateReport(session, editing.id, {
@@ -277,7 +308,10 @@ function ReportsTab({ session, schools, sections, reports, refresh }: { session:
           description: editing.description,
           sqlQuery: editing.sqlQuery,
           status: editing.status,
-          highlightRules: rules
+          highlightRules: rules,
+          subreportQuery: subreportQuery || undefined,
+          subreportKeyColumn: subreportKeyColumn,
+          columns: columns
         });
         setNotice('Report updated.');
       } else {
@@ -287,7 +321,10 @@ function ReportsTab({ session, schools, sections, reports, refresh }: { session:
           description: editing.description ?? '',
           sqlQuery: editing.sqlQuery ?? '',
           status: editing.status ?? 'inactive',
-          highlightRules: rules
+          highlightRules: rules,
+          subreportQuery: subreportQuery || undefined,
+          subreportKeyColumn: subreportKeyColumn,
+          columns: columns
         });
         setNotice('Report created.');
       }
@@ -304,13 +341,26 @@ function ReportsTab({ session, schools, sections, reports, refresh }: { session:
     if (!editing?.sqlQuery) return;
     setValidateState('idle');
     setError('');
+    // Validate main query first.
     try {
       await validateReportSql(session, editing.sqlQuery);
-      setValidateState('ok');
     } catch (failure) {
       setValidateState('fail');
       setError(errorMessage(failure, 'The SQL did not validate.'));
+      return;
     }
+    // If a subreport is present, validate the child query too.
+    if (editing.subreportQuery?.trim()) {
+      try {
+        await validateReportSql(session, editing.subreportQuery, true);
+        setValidateState('ok');
+      } catch (subFailure) {
+        setValidateState('fail');
+        setError(errorMessage(subFailure, 'The subreport SQL did not validate (must be read-only and reference :person_id).'));
+      }
+      return;
+    }
+    setValidateState('ok');
   }
 
   async function previewRun() {
@@ -319,7 +369,7 @@ function ReportsTab({ session, schools, sections, reports, refresh }: { session:
     setPreview(null);
     try {
       const run = await runReport(session, editing.id, previewOrg);
-      setPreview({ columns: run.columns, rows: run.rows.slice(0, 5) });
+      setPreview({ columns: run.columns, rows: run.rows.slice(0, 5), subreport: run.subreport ?? null });
     } catch (failure) {
       setError(errorMessage(failure, 'The preview could not run.'));
     }
@@ -390,6 +440,13 @@ function ReportsTab({ session, schools, sections, reports, refresh }: { session:
         <label className="settings-field"><span>SQL query (must be a single SELECT referencing :organization)</span>
           <textarea value={editing.sqlQuery ?? ''} onChange={(event) => { setEditing({ ...editing, sqlQuery: event.target.value }); setValidateState('idle'); }} rows={10} spellCheck={false} />
         </label>
+        <label className="settings-field"><span>Display columns (comma-separated, optional). Leave blank to use query columns.</span>
+          <input
+            value={(editing.columns ?? []).join(', ')}
+            onChange={(event) => setEditing({ ...editing, columns: event.target.value.split(',').map((c) => c.trim()).filter(Boolean) })}
+            placeholder="e.g. full_name, assignment, track, classroom"
+          />
+        </label>
         <div className="settings-form-row">
           <button className="back-button" onClick={() => void validate()}><CheckCircle2 size={16} />Validate</button>
           {validateState === 'ok' && <span className="ready-badge">Valid</span>}
@@ -404,7 +461,7 @@ function ReportsTab({ session, schools, sections, reports, refresh }: { session:
           </>}
         </div>
         {preview && <div className="settings-preview">
-          <p><strong>Preview</strong> — first {preview.rows.length} of {preview.columns.length} columns</p>
+          <p><strong>Preview</strong> — first {preview.rows.length} of {preview.columns.length} columns{preview.subreport ? ' · with subreport' : ''}</p>
           <div className="report-table-wrap"><table className="report-table">
             <thead><tr>{preview.columns.map((column) => <th key={column}>{column}</th>)}</tr></thead>
             <tbody>{preview.rows.map((row, index) => {
@@ -425,11 +482,36 @@ function ReportsTab({ session, schools, sections, reports, refresh }: { session:
                 }
                 if (match) { bg = HIGHLIGHT_PALETTE[r.color]?.bg; break; }
               }
-              return <tr key={index} style={bg ? { background: bg } : undefined}>{preview.columns.map((column) => <td key={column}><span>{row[column] === null || row[column] === undefined ? '' : String(row[column])}</span></td>)}</tr>;
+              return <Fragment key={index}>
+                <tr style={bg ? { background: bg } : undefined}>{preview.columns.map((column) => <td key={column}><span>{row[column] === null || row[column] === undefined ? '' : String(row[column])}</span></td>)}</tr>
+                <SubreportPreviewCells sub={row.__subreport} colSpan={preview.columns.length} />
+              </Fragment>;
             })}</tbody>
           </table></div>
         </div>}
       </> : <>
+        <div className="settings-field"><span>Subreport (optional)</span>
+          <p className="highlight-desc">Add a child query that runs once per main row, bound to the row's key column. Child queries must be read-only and reference <code>:person_id</code>.</p>
+          <label className="settings-field">
+            <span>Subreport SQL (must be a single SELECT referencing :person_id)</span>
+            <textarea
+              value={editing.subreportQuery ?? ''}
+              onChange={(event) => { setEditing({ ...editing, subreportQuery: event.target.value }); setValidateState('idle'); }}
+              rows={8}
+              spellCheck={false}
+              placeholder="SELECT area, area_description AS area_desc, years, '' AS program, NCLB AS nclb_code FROM cert_area WHERE person_id = :person_id ORDER BY area"
+            />
+          </label>
+          <label className="settings-field">
+            <span>Subreport key column (row value bound to :person_id)</span>
+            <input
+              value={editing.subreportKeyColumn ?? 'person_id'}
+              onChange={(event) => setEditing({ ...editing, subreportKeyColumn: event.target.value })}
+              placeholder="person_id"
+            />
+          </label>
+          <p className="highlight-hint">Leave Subreport SQL blank to disable the nested table for this report.</p>
+        </div>
         <div className="settings-field"><span>Row Highlighting (optional)</span>
           <p className="highlight-desc">When a row matches a rule, the entire row is tinted. First matching rule wins. For the current year use <code>THISYEAR</code> (all caps) and next year use <code>NEXTYEAR</code> (all caps).</p>
           <RowHighlightingEditor
@@ -459,7 +541,10 @@ function ReportsTab({ session, schools, sections, reports, refresh }: { session:
                   }
                   if (match) { bg = HIGHLIGHT_PALETTE[r.color]?.bg; break; }
                 }
-                return <tr key={index} style={bg ? { background: bg } : undefined}>{preview.columns.map((column) => <td key={column}><span>{row[column] === null || row[column] === undefined ? '' : String(row[column])}</span></td>)}</tr>;
+              return <Fragment key={index}>
+                <tr style={bg ? { background: bg } : undefined}>{preview.columns.map((column) => <td key={column}><span>{row[column] === null || row[column] === undefined ? '' : String(row[column])}</span></td>)}</tr>
+                <SubreportPreviewCells sub={row.__subreport} colSpan={preview.columns.length} />
+              </Fragment>;
               })}</tbody>
             </table></div>
           </div>}

@@ -1,5 +1,6 @@
 import type { Value } from '@libsql/client';
 import type {
+  GenericReportRowWithSubreport,
   GenericReportRun,
   OpenPositionRow,
   Person,
@@ -35,7 +36,32 @@ function dbValue(value: string | number | null | undefined): Value {
   if (value === undefined) return null;
   return value;
 }
-import { REPORT_ROW_CAP, bindOrganization, newId, nowIso, validateReportSql } from '../reports-sql.js';
+
+/** Run a child (subreport) query bounded to a single parent row key value. */
+async function runSubreportRows(sql: string, keyColumn: string, keyValue: unknown): Promise<Record<string, unknown>[]> {
+  const bound = bindNamedParam(sql, 'person_id', String(keyValue));
+  const result = await getLibsqlClient().execute({ sql: bound.text, args: bound.params });
+  return result.rows.slice(0, REPORT_ROW_CAP).map((row) => {
+    const record: Record<string, unknown> = {};
+    for (const column of result.columns) {
+      const cell = (row as Record<string, unknown>)[column];
+      record[column] = cell === null ? null : cell;
+    }
+    return record;
+  });
+}
+
+/** Resolve the child (subreport) display columns from a zero-row probe. */
+async function executeSubreportColumns(sql: string): Promise<string[]> {
+  const boundProbe = bindNamedParam(sql, 'person_id', '___probe___');
+  try {
+    const result = await getLibsqlClient().execute({ sql: boundProbe.text, args: boundProbe.params });
+    return [...result.columns];
+  } catch {
+    return [];
+  }
+}
+import { REPORT_ROW_CAP, bindNamedParam, bindOrganization, newId, nowIso, validateReportSql, validateSubreportSql } from '../reports-sql.js';
 import { parseHighlightRules, reportHighlightRulesSchema } from '../report-highlight.js';
 
 // Legacy open_pos_read.inc, adapted to SQLite/Turso:
@@ -417,6 +443,10 @@ export const tursoRepositories: Repositories = {
         const parsed = reportHighlightRulesSchema.safeParse(input.highlightRules);
         if (!parsed.success) throw codedError('HIGHLIGHT_RULE_INVALID');
       }
+      if (input.subreportQuery) {
+        const subSafety = validateSubreportSql(input.subreportQuery);
+        if (!subSafety.ok) throw codedError(subSafety.error);
+      }
       const highlightRules = input.highlightRules !== undefined
         ? (reportHighlightRulesSchema.parse(input.highlightRules) as ReportDefinition['highlightRules'])
         : [];
@@ -430,13 +460,16 @@ export const tursoRepositories: Repositories = {
         sqlQuery: input.sqlQuery.trim(),
         status: input.status ?? 'inactive',
         highlightRules,
+        subreportQuery: input.subreportQuery?.trim() || undefined,
+        subreportKeyColumn: input.subreportKeyColumn?.trim() || null,
+        columns: input.columns && input.columns.length > 0 ? input.columns : undefined,
         createdBy: input.createdBy ?? null,
         createdAt: now,
         updatedAt: now
       };
       await query(
-        'INSERT INTO reports (id, section_id, title, description, sql_query, status, highlight_rules, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        [report.id, report.sectionId, report.title, report.description, dbValue(report.sqlQuery), report.status, JSON.stringify(highlightRules ?? []), dbValue(report.createdBy), dbValue(report.createdAt), dbValue(report.updatedAt)]
+        'INSERT INTO reports (id, section_id, title, description, sql_query, status, highlight_rules, subreport_query, subreport_key_column, columns, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [report.id, report.sectionId, report.title, report.description, dbValue(report.sqlQuery), report.status, JSON.stringify(highlightRules ?? []), dbValue(report.subreportQuery), dbValue(report.subreportKeyColumn), dbValue(report.columns ? JSON.stringify(report.columns) : undefined), dbValue(report.createdBy), dbValue(report.createdAt), dbValue(report.updatedAt)]
       );
       return report;
     },
@@ -459,6 +492,12 @@ export const tursoRepositories: Repositories = {
       const nextSql = (patch.sqlQuery ?? current.sql_query ?? '').trim();
       const safety = validateReportSql(nextSql);
       if (!safety.ok) throw codedError(safety.error);
+      if (patch.subreportQuery !== undefined) {
+        if (patch.subreportQuery.trim()) {
+          const subSafety = validateSubreportSql(patch.subreportQuery.trim());
+          if (!subSafety.ok) throw codedError(subSafety.error);
+        }
+      }
       if (patch.highlightRules !== undefined) {
         const parsed = reportHighlightRulesSchema.safeParse(patch.highlightRules);
         if (!parsed.success) throw codedError('HIGHLIGHT_RULE_INVALID');
@@ -466,11 +505,20 @@ export const tursoRepositories: Repositories = {
       const nextHighlightRules = patch.highlightRules !== undefined
         ? (reportHighlightRulesSchema.parse(patch.highlightRules) as ReportDefinition['highlightRules'])
         : parseHighlightRules((current as ReportRow).highlight_rules);
+      const nextSubreportQuery = patch.subreportQuery !== undefined
+        ? (patch.subreportQuery.trim() || undefined)
+        : (current.subreport_query ?? undefined);
+      const nextSubreportKeyColumn = patch.subreportKeyColumn !== undefined
+        ? (patch.subreportKeyColumn ? patch.subreportKeyColumn.trim() : null)
+        : (current.subreport_key_column ?? null);
+      const nextColumns = patch.columns !== undefined
+        ? (patch.columns.length > 0 ? patch.columns : undefined)
+        : parseColumns((current as ReportRow).columns);
       const nextStatus = patch.status ?? current.status;
       const updatedAt = nowIso();
       await query(
-        'UPDATE reports SET section_id = ?, title = ?, description = ?, sql_query = ?, status = ?, highlight_rules = ?, updated_at = ? WHERE id = ?',
-        [nextSectionId, nextTitle, nextDescription, nextSql, nextStatus, JSON.stringify(nextHighlightRules ?? []), updatedAt, id]
+        'UPDATE reports SET section_id = ?, title = ?, description = ?, sql_query = ?, status = ?, highlight_rules = ?, subreport_query = ?, subreport_key_column = ?, columns = ?, updated_at = ? WHERE id = ?',
+        [nextSectionId, nextTitle, nextDescription, nextSql, nextStatus, JSON.stringify(nextHighlightRules ?? []), dbValue(nextSubreportQuery), dbValue(nextSubreportKeyColumn), dbValue(nextColumns ? JSON.stringify(nextColumns) : undefined), updatedAt, id]
       );
       const refreshed = await query<ReportRow>(
         `SELECT r.*, s.title AS section_title FROM reports r
@@ -502,10 +550,14 @@ export const tursoRepositories: Repositories = {
       // Defense in depth: re-validate stored SQL at run time.
       const safety = validateReportSql(report.sqlQuery);
       if (!safety.ok) throw codedError(safety.error);
+      if (report.subreportQuery) {
+        const subSafety = validateSubreportSql(report.subreportQuery);
+        if (!subSafety.ok) throw codedError(subSafety.error);
+      }
       const { text, params } = bindOrganization(report.sqlQuery, organization);
       const result = await getLibsqlClient().execute({ sql: text, args: params });
       const columns = [...result.columns];
-      const capped = result.rows.slice(0, REPORT_ROW_CAP).map((row) => {
+      const mainRows = result.rows.slice(0, REPORT_ROW_CAP).map((row) => {
         const record: Record<string, unknown> = {};
         for (const column of columns) {
           const cell = (row as Record<string, unknown>)[column];
@@ -513,11 +565,37 @@ export const tursoRepositories: Repositories = {
         }
         return record;
       });
+
+      let subreport: GenericReportRun['subreport'] = null;
+      if (report.subreportQuery && report.subreportKeyColumn) {
+        const keyColumn = report.subreportKeyColumn;
+        const subColumns = await executeSubreportColumns(report.subreportQuery);
+        const childCache = new Map<string, Record<string, unknown>[]>();
+        for (const row of mainRows) {
+          const keyValue = row[keyColumn];
+          if (keyValue === undefined || keyValue === null) continue;
+          const cacheKey = String(keyValue);
+          let childRows = childCache.get(cacheKey);
+          if (!childRows) {
+            childRows = await runSubreportRows(report.subreportQuery, keyColumn, keyValue);
+            childCache.set(cacheKey, childRows);
+          }
+          (row as GenericReportRowWithSubreport).__subreport = {
+            keyColumn,
+            columns: subColumns,
+            rows: childRows,
+            truncated: false
+          };
+        }
+        subreport = { keyColumn };
+      }
+
       return {
         report: { id: report.id, title: report.title, description: report.description, sectionTitle: report.sectionTitle, highlightRules: report.highlightRules },
         organization,
-        columns,
-        rows: capped,
+        columns: report.columns && report.columns.length > 0 ? report.columns : columns,
+        rows: mainRows,
+        subreport,
         truncated: result.rows.length > REPORT_ROW_CAP
       } satisfies GenericReportRun;
     },
@@ -798,6 +876,9 @@ type ReportRow = {
   updated_at?: string | null;
   section_title?: string | null;
   highlight_rules?: string | null;
+  subreport_query?: string | null;
+  subreport_key_column?: string | null;
+  columns?: string | null;
 };
 
 function toSection(row: SectionRow): ReportSection {
@@ -823,10 +904,23 @@ function toReport(row: ReportRow): ReportDefinition {
     status: (row.status === 'active' ? 'active' : 'inactive'),
     rowKeyColumn: (row as unknown as { row_key_column?: string | null }).row_key_column ?? null,
     highlightRules: parseHighlightRules((row as ReportRow).highlight_rules),
+    subreportQuery: row.subreport_query ?? undefined,
+    subreportKeyColumn: row.subreport_key_column ?? null,
+    columns: parseColumns((row as ReportRow).columns),
     createdBy: row.created_by ?? null,
     createdAt: row.created_at ?? undefined,
     updatedAt: row.updated_at ?? undefined
   };
+}
+
+function parseColumns(value: string | null | undefined): string[] | undefined {
+  if (!value) return undefined;
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 type ReportViewRow = {

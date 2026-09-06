@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   ArrowLeft,
@@ -50,6 +50,7 @@ import {
   rowKeyForRow
 } from './reportViews';
 import type {
+  GenericReportRowWithSubreport,
   GenericReportRun,
   HighlightColorId,
   LoginSession,
@@ -768,39 +769,69 @@ function GenericReportView({
                 const personIdForRow = personIdCache.current.get(empNo);
                 const isFavorited = personIdForRow ? favoritedPersonIds.has(personIdForRow) : false;
                 const nameCol = displayColumns.find((c) => c.toLowerCase().includes('name')) ?? displayColumns[0];
+                const sub = (record as GenericReportRowWithSubreport).__subreport;
                 return (
-                  <tr
-                    key={`${key}-${index}`}
-                    className={`report-card${adminClass}${clickable ? ' report-row--clickable' : ''}`}
-                    style={bg ? { background: bg, borderLeft: `4px solid ${adminHl.border}` } : undefined}
-                    title={clickable ? `Open employee record for ${empNo}` : adminHl ? `Highlighted ${adminHl.color}` : undefined}
-                    onClick={clickable ? () => onOpenRecord!(empNo) : undefined}
-                    role={clickable ? 'button' : undefined}
-                    tabIndex={clickable ? 0 : undefined}
-                    onKeyDown={clickable ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpenRecord!(empNo); } } : undefined}
-                  >
-                    {session && empNo ? (
-                      <td className="report-pin-cell" aria-label="Pin to Favorites">
-                        <button
-                          type="button"
-                          className={`report-pin-toggle ${isFavorited ? 'report-pin-toggle--active' : ''}`}
-                          onClick={(e) => void toggleFavorite(record, e)}
-                          aria-label={isFavorited ? 'Remove from Favorites' : 'Pin to Favorites'}
-                          title={isFavorited ? 'Favorited — click to remove' : 'Pin to Favorites'}
-                          aria-pressed={isFavorited}
-                        >
-                          <Bookmark size={16} fill={isFavorited ? 'currentColor' : 'none'} />
-                        </button>
-                      </td>
-                    ) : null}
-                    {displayColumns.map((column) => (
-                      <td key={column} data-label={column}>
-                        <span style={column === nameCol ? { display: 'inline-flex', alignItems: 'center', gap: 6 } : undefined}>
-                          {record[column] === null || record[column] === undefined ? '' : String(record[column])}
-                        </span>
-                      </td>
-                    ))}
-                  </tr>
+                  <Fragment key={`${key}-${index}`}>
+                    <tr
+                      className={`report-card${adminClass}${clickable ? ' report-row--clickable' : ''}`}
+                      style={bg ? { background: bg, borderLeft: `4px solid ${adminHl.border}` } : undefined}
+                      title={clickable ? `Open employee record for ${empNo}` : adminHl ? `Highlighted ${adminHl.color}` : undefined}
+                      onClick={clickable ? () => onOpenRecord!(empNo) : undefined}
+                      role={clickable ? 'button' : undefined}
+                      tabIndex={clickable ? 0 : undefined}
+                      onKeyDown={clickable ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpenRecord!(empNo); } } : undefined}
+                    >
+                      {session && empNo ? (
+                        <td className="report-pin-cell" aria-label="Pin to Favorites">
+                          <button
+                            type="button"
+                            className={`report-pin-toggle ${isFavorited ? 'report-pin-toggle--active' : ''}`}
+                            onClick={(e) => void toggleFavorite(record, e)}
+                            aria-label={isFavorited ? 'Remove from Favorites' : 'Pin to Favorites'}
+                            title={isFavorited ? 'Favorited — click to remove' : 'Pin to Favorites'}
+                            aria-pressed={isFavorited}
+                          >
+                            <Bookmark size={16} fill={isFavorited ? 'currentColor' : 'none'} />
+                          </button>
+                        </td>
+                      ) : (
+                        <td className="report-pin-cell" aria-hidden="true" />
+                      )}
+                      {displayColumns.map((column) => (
+                        <td key={column} data-label={column}>
+                          <span style={column === nameCol ? { display: 'inline-flex', alignItems: 'center', gap: 6 } : undefined}>
+                            {record[column] === null || record[column] === undefined ? '' : String(record[column])}
+                          </span>
+                        </td>
+                      ))}
+                    </tr>
+                    {sub && sub.rows.length > 0 && (
+                      <tr className="report-subreport-row">
+                        <td colSpan={displayColumns.length + 1}>
+                          <table className="report-subreport-table">
+                            <thead>
+                              <tr>
+                                {sub.columns.map((col) => (
+                                  <th key={col}>{col}</th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {sub.rows.map((childRow, childIndex) => (
+                                <tr key={childIndex}>
+                                  {sub.columns.map((col) => (
+                                    <td key={col} data-label={col}>
+                                      {childRow[col] === null || childRow[col] === undefined ? '' : String(childRow[col])}
+                                    </td>
+                                  ))}
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 );
               })}
             </tbody>

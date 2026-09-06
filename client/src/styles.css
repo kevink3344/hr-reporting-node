@@ -327,6 +327,17 @@ h1, h2, h3, p { margin-top: 0; } h1 { margin-bottom: 0; font-size: 17px; } h2 { 
   .report-pin-col-head { display: none; }
   .report-pin-cell { display: none; }
 }
+/* Nested subreport table (main report + child rows) */
+.report-subreport-row td { border-bottom: 1px solid #e4ddd1; padding: 0; }
+.report-subreport-table { width: 100%; border-collapse: collapse; }
+.report-subreport-table th { padding: 7px 12px; color: #8b6b3e; background: #f7f3eb; border-bottom: 1px solid #d9d0c1; font-size: 10px; letter-spacing: .05em; text-transform: uppercase; }
+.report-subreport-table td { padding: 8px 12px; border-bottom: 1px solid #ece6db; color: #514a41; font-size: 12px; white-space: nowrap; }
+@media (max-width: 680px) {
+  .report-subreport-table th { display: none; }
+  .report-subreport-table td { display: flex; justify-content: space-between; align-items: baseline; gap: 14px; padding: 4px 0; border: 0; text-align: left; }
+  .report-subreport-table td::before { content: attr(data-label); flex: 0 0 auto; font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: #8b6b3e; }
+  .report-subreport-table td { color: #665f56; font-size: 13px; word-break: break-word; }
+}
 .record-pin { display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; color: #8b6b3e; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; vertical-align: middle; }
 .record-pin-meta { display: block; margin-top: 4px; color: #8c857a; font-size: 11px; }
 .nav-count { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 6px; margin-left: auto; border-radius: 999px; background: #edf3ee; color: #2e5e56; font-size: 11px; font-weight: 700; }

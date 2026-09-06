@@ -12,6 +12,7 @@ import { isDbReady as isTursoDbReady } from './db-turso.js';
 import { openApiDocument } from './openapi.js';
 import { viewDefinitionSchema } from './report-views.js';
 import { reportHighlightRulesSchema } from './report-highlight.js';
+import { validateSubreportSql } from './reports-sql.js';
 
 const querySchema = z.object({
   search: z.string().trim().optional(),
@@ -44,7 +45,10 @@ const reportDefinitionSchema = z.object({
   sqlQuery: z.string().trim().min(1).max(20000),
   status: z.enum(['active', 'inactive']).optional().default('inactive'),
   rowKeyColumn: z.string().trim().min(1).max(64).nullable().optional(),
-  highlightRules: reportHighlightRulesSchema.optional()
+  highlightRules: reportHighlightRulesSchema.optional(),
+  subreportQuery: z.string().trim().max(20000).optional(),
+  subreportKeyColumn: z.string().trim().min(1).max(64).nullable().optional(),
+  columns: z.array(z.string().trim().min(1).max(64)).max(200).optional()
 });
 
 const reportDefinitionPatchSchema = reportDefinitionSchema.partial();
@@ -59,7 +63,8 @@ const reportRunQuerySchema = z.object({
 });
 
 const validateSqlSchema = z.object({
-  sqlQuery: z.string().trim().min(1).max(20000)
+  sqlQuery: z.string().trim().min(1).max(20000),
+  subreport: z.boolean().optional()
 });
 
 /** Express 5 types route params as string | string[]; our ids are single segments. */
@@ -100,9 +105,9 @@ function requireAdmin(request: express.Request, response: express.Response, next
   next();
 }
 
-function stripSqlForReader<T extends { sqlQuery?: string }>(report: T, admin: boolean): T {
+function stripSqlForReader<T extends { sqlQuery?: string; subreportQuery?: string }>(report: T, admin: boolean): T {
   if (admin) return report;
-  const { sqlQuery: _omitted, ...rest } = report;
+  const { sqlQuery: _omitted, subreportQuery: _omittedSub, ...rest } = report;
   return rest as T;
 }
 
@@ -117,6 +122,7 @@ function repoErrorToStatus(error: unknown): { status: number; body: { error: str
     case 'ONLY_SELECT_ALLOWED':
     case 'FORBIDDEN_KEYWORD':
     case 'ORGANIZATION_SCOPE_REQUIRED':
+    case 'SUBREPORT_SCOPE_REQUIRED':
     case 'SQL_EXPLAIN_FAILED':
     case 'SECTION_NOT_FOUND':
     case 'VIEW_NAME_REQUIRED':
@@ -335,7 +341,9 @@ export function createApp(repositories: Repositories = fixtureRepositories) {
   application.post('/api/reports/validate', requireAdmin, async (request, response, next) => {
     try {
       const input = validateSqlSchema.parse(request.body);
-      const result = await repositories.reportDefinitions.explain(input.sqlQuery);
+      const result = input.subreport
+        ? validateSubreportSql(input.sqlQuery)
+        : await repositories.reportDefinitions.explain(input.sqlQuery);
       if (!result.ok) {
         response.status(400).json({ error: result.error });
         return;
@@ -357,6 +365,9 @@ export function createApp(repositories: Repositories = fixtureRepositories) {
         status: input.status ?? 'inactive',
         rowKeyColumn: input.rowKeyColumn ?? null,
         highlightRules: input.highlightRules,
+        subreportQuery: input.subreportQuery,
+        subreportKeyColumn: input.subreportKeyColumn ?? null,
+        columns: input.columns,
         createdBy: callerName(request)
       });
       response.status(201).json(created);
@@ -393,7 +404,10 @@ export function createApp(repositories: Repositories = fixtureRepositories) {
         sqlQuery: patch.sqlQuery,
         status: patch.status,
         rowKeyColumn: patch.rowKeyColumn,
-        highlightRules: patch.highlightRules
+        highlightRules: patch.highlightRules,
+        subreportQuery: patch.subreportQuery,
+        subreportKeyColumn: patch.subreportKeyColumn ?? null,
+        columns: patch.columns
       });
       if (!updated) {
         response.status(404).json({ error: 'REPORT_NOT_FOUND' });

@@ -112,7 +112,7 @@ export function getReport(session: LoginSession | null | undefined, id: string):
   return request<ReportDefinition>(`/api/reports/${encodeURIComponent(id)}`, { headers: adminHeaders(session) });
 }
 
-export function createReport(session: LoginSession, input: { sectionId: string; title: string; description?: string; sqlQuery: string; status?: 'active' | 'inactive'; highlightRules?: unknown }): Promise<ReportDefinition> {
+export function createReport(session: LoginSession, input: { sectionId: string; title: string; description?: string; sqlQuery: string; status?: 'active' | 'inactive'; highlightRules?: unknown; subreportQuery?: string; subreportKeyColumn?: string | null; columns?: string[] }): Promise<ReportDefinition> {
   return request<ReportDefinition>('/api/reports', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...adminHeaders(session) },
@@ -120,7 +120,7 @@ export function createReport(session: LoginSession, input: { sectionId: string; 
   });
 }
 
-export function updateReport(session: LoginSession, id: string, patch: { sectionId?: string; title?: string; description?: string; sqlQuery?: string; status?: 'active' | 'inactive'; highlightRules?: unknown }): Promise<ReportDefinition> {
+export function updateReport(session: LoginSession, id: string, patch: { sectionId?: string; title?: string; description?: string; sqlQuery?: string; status?: 'active' | 'inactive'; highlightRules?: unknown; subreportQuery?: string; subreportKeyColumn?: string | null; columns?: string[] }): Promise<ReportDefinition> {
   return request<ReportDefinition>(`/api/reports/${encodeURIComponent(id)}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json', ...adminHeaders(session) },
@@ -135,11 +135,11 @@ export function deleteReport(session: LoginSession, id: string): Promise<void> {
   });
 }
 
-export function validateReportSql(session: LoginSession, sqlQuery: string): Promise<{ ok: true }> {
+export function validateReportSql(session: LoginSession, sqlQuery: string, subreport = false): Promise<{ ok: true }> {
   return request<{ ok: true }>('/api/reports/validate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...adminHeaders(session) },
-    body: JSON.stringify({ sqlQuery })
+    body: JSON.stringify({ sqlQuery, subreport })
   });
 }
 

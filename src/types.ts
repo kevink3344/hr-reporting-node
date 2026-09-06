@@ -137,6 +137,12 @@ export type ReportDefinition = {
   /** Declared stable key column for row identity (highlights/comments). Null = hash fallback. */
   rowKeyColumn?: string | null;
   highlightRules?: ReportHighlightRule[];
+  /** Optional child query run once per main row (main report + subreport). */
+  subreportQuery?: string;
+  /** Main-row column whose value is bound to the child query's :person_id. */
+  subreportKeyColumn?: string | null;
+  /** Optional curated MAIN display columns (empty/undefined = driver metadata). */
+  columns?: string[];
   createdBy?: string | null;
   createdAt?: string;
   updatedAt?: string;
@@ -144,11 +150,24 @@ export type ReportDefinition = {
 
 export type GenericReportRow = Record<string, unknown>;
 
+export type GenericSubreportRun = {
+  keyColumn: string;
+  columns: string[];
+  rows: GenericReportRow[];
+  truncated: boolean;
+};
+
+export type GenericReportRowWithSubreport = GenericReportRow & {
+  __subreport?: GenericSubreportRun;
+};
+
 export type GenericReportRun = {
   report: { id: string; title: string; description: string; sectionTitle?: string; highlightRules?: ReportHighlightRule[] };
   organization: string;
   columns: string[];
-  rows: GenericReportRow[];
+  rows: GenericReportRowWithSubreport[];
+  /** Present when the report has a nested subreport (drives the client renderer). */
+  subreport?: { keyColumn: string } | null;
   truncated: boolean;
 };
 

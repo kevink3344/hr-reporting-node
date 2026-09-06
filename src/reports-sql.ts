@@ -32,6 +32,23 @@ function stripComments(sql: string): string {
 
 /** Validate admin-supplied report SQL. Returns ok or a machine-readable error. */
 export function validateReportSql(sqlQuery: unknown): SqlValidationResult {
+  return validateReadOnlySql(sqlQuery, 'organization', 'ORGANIZATION_SCOPE_REQUIRED');
+}
+
+/**
+ * Validate a read-only child (subreport) query. Requires the :person_id bind
+ * (or the configured key param) so a nested child stays row-scoped.
+ */
+export function validateSubreportSql(sqlQuery: unknown): SqlValidationResult {
+  return validateReadOnlySql(sqlQuery, 'person_id', 'SUBREPORT_SCOPE_REQUIRED');
+}
+
+/**
+ * Shared read-only SQL safety rules for admin-configured report queries.
+ * Enforces: single statement, SELECT/WITH only, forbidden write/DDL keywords,
+ * a length cap, and a required named bind parameter (`:param`).
+ */
+export function validateReadOnlySql(sqlQuery: unknown, requiredParam: string, missingError: string): SqlValidationResult {
   if (typeof sqlQuery !== 'string' || !sqlQuery.trim()) {
     return { ok: false, error: 'SQL_QUERY_REQUIRED' };
   }
@@ -59,9 +76,10 @@ export function validateReportSql(sqlQuery: unknown): SqlValidationResult {
     return { ok: false, error: 'FORBIDDEN_KEYWORD' };
   }
 
-  // Reports must stay school-scoped via the :organization bind parameter.
-  if (!/:organization\b/.test(sql)) {
-    return { ok: false, error: 'ORGANIZATION_SCOPE_REQUIRED' };
+  // Reports must stay scoped via the required named bind parameter.
+  const paramPattern = new RegExp(`:${requiredParam}\\b`);
+  if (!paramPattern.test(sql)) {
+    return { ok: false, error: missingError };
   }
 
   return { ok: true };
@@ -69,9 +87,15 @@ export function validateReportSql(sqlQuery: unknown): SqlValidationResult {
 
 /** Bind :organization placeholders to the driver positional style (?). */
 export function bindOrganization(sqlQuery: string, organization: string): { text: string; params: (string | number | null)[] } {
-  const occurrences = (sqlQuery.match(/:organization\b/g) ?? []).length;
-  const text = sqlQuery.replace(/:organization\b/g, '?');
-  return { text, params: Array.from({ length: occurrences }, () => organization) };
+  return bindNamedParam(sqlQuery, 'organization', organization);
+}
+
+/** Bind a named `:param` placeholder to the driver positional style (?). */
+export function bindNamedParam(sqlQuery: string, param: string, value: string | number): { text: string; params: (string | number | null)[] } {
+  const patterns = new RegExp(`:${param}\\b`, 'g');
+  const occurrences = (sqlQuery.match(patterns) ?? []).length;
+  const text = sqlQuery.replace(patterns, '?');
+  return { text, params: Array.from({ length: occurrences }, () => value) };
 }
 
 export function newId(): string {

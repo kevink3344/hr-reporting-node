@@ -28,7 +28,7 @@ import type {
   ReportViewListFilter,
   ReportViewUpdate
 } from './contracts.js';
-import { REPORT_ROW_CAP, bindOrganization, newId, nowIso, validateReportSql } from '../reports-sql.js';
+import { REPORT_ROW_CAP, bindOrganization, newId, nowIso, validateReportSql, validateSubreportSql } from '../reports-sql.js';
 import { parseHighlightRules, reportHighlightRulesSchema } from '../report-highlight.js';
 import { viewDefinitionSchema } from '../report-views.js';
 
@@ -297,6 +297,10 @@ export const fixtureRepositories: Repositories = {
       }
       const safety = validateReportSql(input.sqlQuery);
       if (!safety.ok) throw Object.assign(new Error(safety.error), { code: safety.error });
+      if (input.subreportQuery) {
+        const subSafety = validateSubreportSql(input.subreportQuery);
+        if (!subSafety.ok) throw Object.assign(new Error(subSafety.error), { code: subSafety.error });
+      }
       if (input.highlightRules !== undefined) {
         const parsed = reportHighlightRulesSchema.safeParse(input.highlightRules);
         if (!parsed.success) throw Object.assign(new Error('HIGHLIGHT_RULE_INVALID'), { code: 'HIGHLIGHT_RULE_INVALID' });
@@ -311,6 +315,9 @@ export const fixtureRepositories: Repositories = {
         status: input.status ?? 'inactive',
         rowKeyColumn: input.rowKeyColumn ?? null,
         highlightRules: input.highlightRules !== undefined ? (reportHighlightRulesSchema.parse(input.highlightRules) as ReportDefinition['highlightRules']) : [],
+        subreportQuery: input.subreportQuery?.trim() || undefined,
+        subreportKeyColumn: input.subreportKeyColumn?.trim() || null,
+        columns: input.columns && input.columns.length > 0 ? input.columns : undefined,
         createdBy: input.createdBy ?? null,
         createdAt: nowIso(),
         updatedAt: nowIso()
@@ -335,6 +342,13 @@ export const fixtureRepositories: Repositories = {
         if (!safety.ok) throw Object.assign(new Error(safety.error), { code: safety.error });
         report.sqlQuery = patch.sqlQuery.trim();
       }
+      if (patch.subreportQuery !== undefined) {
+        if (patch.subreportQuery.trim()) {
+          const subSafety = validateSubreportSql(patch.subreportQuery.trim());
+          if (!subSafety.ok) throw Object.assign(new Error(subSafety.error), { code: subSafety.error });
+        }
+        report.subreportQuery = patch.subreportQuery.trim() || undefined;
+      }
       if (patch.highlightRules !== undefined) {
         const parsed = reportHighlightRulesSchema.safeParse(patch.highlightRules);
         if (!parsed.success) throw Object.assign(new Error('HIGHLIGHT_RULE_INVALID'), { code: 'HIGHLIGHT_RULE_INVALID' });
@@ -346,6 +360,8 @@ export const fixtureRepositories: Repositories = {
       if (patch.description !== undefined) report.description = patch.description.trim();
       if (patch.status !== undefined) report.status = patch.status;
       if (patch.rowKeyColumn !== undefined) report.rowKeyColumn = patch.rowKeyColumn;
+      if (patch.subreportKeyColumn !== undefined) report.subreportKeyColumn = patch.subreportKeyColumn?.trim() || null;
+      if (patch.columns !== undefined) report.columns = patch.columns.length > 0 ? patch.columns : undefined;
       report.updatedAt = nowIso();
       return { ...report };
     },
@@ -368,11 +384,18 @@ export const fixtureRepositories: Repositories = {
       if (report.id === 'open-position-report') {
         return toOpenPositionRun(report, organization);
       }
+      // Fixture parity for arbitrary reports: return the curated columns when
+      // provided, plus a subreport envelope (empty rows) so the client renders
+      // identically to a Turso-backed run.
+      const subreport = report.subreportQuery && report.subreportKeyColumn
+        ? { keyColumn: report.subreportKeyColumn }
+        : null;
       return {
         report: { id: report.id, title: report.title, description: report.description, sectionTitle: report.sectionTitle },
         organization,
-        columns: [],
+        columns: report.columns && report.columns.length > 0 ? report.columns : [],
         rows: [],
+        subreport,
         truncated: false
       };
     },
