@@ -427,6 +427,7 @@ function GenericReportView({
     report: result.report,
     organization: result.organization,
     columns: displayColumns,
+    additionalColumns: result.report.additionalColumns ?? [],
     rows: displayRows.map((row) => {
       const out: Record<string, unknown> = {};
       for (const col of displayColumns) out[col] = (row as Record<string, unknown>)[col];

@@ -39,9 +39,11 @@ export async function exportGenericReport(run: {
   rows: (Record<string, unknown> & { __subreport?: { keyColumn: string; columns: string[]; rows: Record<string, unknown>[] } })[];
   highlightRules?: ReportHighlightRule[];
   subreport?: { keyColumn: string } | null;
+  additionalColumns?: string[];
 }): Promise<void> {
   const { utils, writeFile } = await import('./vendor/xlsx.mjs');
-  const header = run.columns;
+  const additionalColumns = run.additionalColumns ?? [];
+  const header = [...run.columns, ...additionalColumns];
   const body = run.rows.map((row) => header.map((column) => {
     const value = row[column];
     return value === null || value === undefined ? '' : String(value);
@@ -62,6 +64,10 @@ export async function exportGenericReport(run: {
     }
   }
   sheet['!cols'] = header.map((label, index) => {
+    // Blank placeholder columns: ensure a visible minimum width (~100px).
+    if (index >= run.columns.length) {
+      return { wpx: 100 };
+    }
     const longest = Math.max(label.length, ...run.rows.map((row) => String(row[header[index]] ?? '').length));
     return { wch: Math.min(Math.max(longest + 2, 10), 40) };
   });

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertCircle, ArrowUpRight, BarChart3, Building2, Check, ChevronDown, ChevronUp, FileText, GripVertical, Home, LogOut, Menu, MessageSquare, Moon, Palette, Pin, PinOff, Search, Send, Settings2, SlidersHorizontal, Sun, Trash2, Users, X } from 'lucide-react';
-import { checkPositionPins, createPositionComment, createPositionPin, deletePositionComment, deletePositionPin, deletePositionPinByKey, getPeople, getPersonRecord, getPositionComments, getPositionDetails, getPositionPins, getSchools, login } from './api';
-import type { LoginSession, Person, PersonRecord, PositionComment, PositionDetails, School } from './types';
+import { checkPositionPins, createPositionComment, createPositionPin, deletePositionComment, deletePositionPin, deletePositionPinByKey, getPeople, getPersonRecord, getPositionComments, getPositionDetails, getPositionPins, getSchools, getSystemMessages, login } from './api';
+import type { LoginSession, Person, PersonRecord, PositionComment, PositionDetails, School, SystemMessage } from './types';
 import { PositionsPage } from './PositionsPage';
 import { ReportsPage } from './ReportsPage';
 import { SettingsPage } from './SettingsPage';
@@ -491,6 +491,11 @@ export function App() {
   const [userSettingsOpen, setUserSettingsOpen] = useState(false);
   const [positionPinsCount, setPositionPinsCount] = useState(0);
   const isAdmin = session?.user.roles.includes('hr_admin') ?? false;
+  // System-wide messages: active announcements loaded from the server, plus
+  // the set the current user has dismissed (per-user, persisted in localStorage).
+  const [systemMessages, setSystemMessages] = useState<SystemMessage[]>([]);
+  const [dismissedMessages, setDismissedMessages] = useState<Set<string>>(new Set());
+  const [splashSeen, setSplashSeen] = useState(false);
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     const saved = window.localStorage.getItem('hr-report-theme');
     return saved === 'dark' ? 'dark' : 'light';
@@ -525,6 +530,55 @@ export function App() {
   function changeHomePage(page: HomePage) {
     setHomePage(page);
     if (session) saveHomePage(session.user.id, page);
+  }
+
+  // Load active system-wide messages on user change. Splash overlays show only
+  // once per login (reset when the user changes); banner dismissal is stored
+  // per-user in localStorage keyed by `${userId}:${messageId}:${updatedAt}`, so
+  // editing a banner re-surfaces it after it was dismissed.
+  useEffect(() => {
+    if (!session) {
+      setSystemMessages([]);
+      setSplashSeen(false);
+      setDismissedMessages(new Set());
+      return;
+    }
+    let cancelled = false;
+    getSystemMessages(session).then((list) => {
+      if (cancelled) return;
+      setSystemMessages(list);
+    }).catch(() => {
+      if (cancelled) return;
+      setSystemMessages([]);
+    });
+    setSplashSeen(false);
+    const dismissed = new Set<string>();
+    loadDismissedFromStorage(dismissed);
+    setDismissedMessages(dismissed);
+    return () => { cancelled = true; };
+  }, [session?.user?.id]);
+
+  // Per-user banner dismissal, keyed by `${userId}:${messageId}:${updatedAt}`.
+  const bannerStorageKey = (messageId: string, updatedAt?: string) =>
+    `${session?.user?.id ?? 'anon'}:${messageId}:${updatedAt ?? ''}`;
+
+  function dismissBanner(message: SystemMessage) {
+    if (!session) return;
+    setDismissedMessages((prev) => {
+      const next = new Set(prev);
+      next.add(bannerStorageKey(message.id, message.updatedAt));
+      try { window.localStorage.setItem('hr-report-banner-dismissed', JSON.stringify([...next])); } catch { /* ignore */ }
+      return next;
+    });
+  }
+
+  function loadDismissedFromStorage(keys: Set<string>) {
+    try {
+      const raw = window.localStorage.getItem('hr-report-banner-dismissed');
+      if (!raw) return;
+      const list = JSON.parse(raw) as string[];
+      for (const key of list) keys.add(key);
+    } catch { /* ignore */ }
   }
 
   // Auto-login: if user previously checked "Stay signed in", restore session without showing login form.
@@ -801,6 +855,15 @@ export function App() {
     void getPeople('', '').then((result) => setPeople(result.data));
   }
 
+  // Compute which system-wide announcements are visible for the current user.
+  // Banners: active, not dismissed, newest first, capped at MAX_ACTIVE_BANNERS.
+  const baseBannerKey = (message: SystemMessage) => bannerStorageKey(message.id, message.updatedAt);
+  const visibleBanners = systemMessages
+    .filter((message) => message.type === 'banner' && message.isActive && !dismissedMessages.has(baseBannerKey(message)))
+    .sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''))
+    .slice(0, 3);
+  const activeSplash = systemMessages.find((message) => message.type === 'splash' && message.isActive) ?? null;
+
   if (!session) {
     return <main className="login-shell">
       <section className="login-art" aria-hidden="true"><div className="login-art-mark"><FileText size={26} /></div><p className="eyebrow">Human Resources</p><h1>Reporting workspace</h1><p>Clearer records. Faster decisions.</p></section>
@@ -846,6 +909,22 @@ export function App() {
           <button className="icon-button subtle logout-button" onClick={signOut} aria-label="Sign out" title="Sign out"><LogOut size={18} /></button>
         </div>
       </header>
+
+      {visibleBanners.length > 0 && (
+        <div className="system-banners" role="region" aria-label="Announcements">
+          {visibleBanners.map((message) => (
+            <div key={message.id} className="system-banner">
+              <div className="system-banner-content">
+                {message.title && <strong className="system-banner-title">{message.title}</strong>}
+                <span className="system-banner-body">{message.message}</span>
+              </div>
+              <button className="system-banner-dismiss" onClick={() => dismissBanner(message)} aria-label="Dismiss announcement" title="Dismiss">
+                <X size={16} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
 
       {activeView === 'reports' ? <ReportsPage schools={schools} session={session} onManage={isAdmin ? () => navigate('settings') : undefined} onOpenRecord={openRecordByEmployeeNumber} onOpenPosition={openPositionByNumber} /> : activeView === 'positions' ? <PositionsPage session={session} schools={schools} onOpenPosition={openPositionByNumber} /> : activeView === 'settings' ? (isAdmin && session ? <SettingsPage session={session} schools={schools} /> : <section className="reports-page"><div className="notice error"><AlertCircle size={18} /><span>Access denied. Admin access is required.</span></div></section>) : <>
       <section className="hero-band">
@@ -927,8 +1006,20 @@ export function App() {
       </>}
       {userSettingsOpen && <>
         <button className="record-drawer-scrim" aria-label="Close settings" onClick={() => setUserSettingsOpen(false)} />
-        <UserSettingsPage homePage={homePage} onChangeHomePage={changeHomePage} onClose={() => setUserSettingsOpen(false)} />
+        <UserSettingsPage homePage={homePage} onChangeHomePage={changeHomePage} onClose={() => setUserSettingsOpen(false)} session={session} isAdmin={isAdmin} />
       </>}
+      {activeSplash && !splashSeen && (
+        <div className="system-splash-scrim" role="dialog" aria-modal="true" aria-label={activeSplash.title || 'Announcement'}>
+          <div className="system-splash">
+            <div className="system-splash-heading">
+              {activeSplash.title && <h2>{activeSplash.title}</h2>}
+              <button className="system-splash-close" onClick={() => setSplashSeen(true)} aria-label="Close announcement" title="Close"><X size={18} /></button>
+            </div>
+            <p className="system-splash-body">{activeSplash.message}</p>
+            <button className="primary-button" onClick={() => setSplashSeen(true)}>Got it</button>
+          </div>
+        </div>
+      )}
     </main>
   );
 }

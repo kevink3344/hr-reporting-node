@@ -13,6 +13,22 @@ export type Person = {
   activeAssignment: boolean;
 };
 
+// ---- System-wide messages (Splash / Banner) ----
+// Admin-authored announcements. 'splash' = large overlay on login (once),
+// 'banner' = dismissible top strip (per-user). Mirrors server src/types.ts.
+export type SystemMessageType = 'splash' | 'banner';
+
+export type SystemMessage = {
+  id: string;
+  title: string;
+  message: string;
+  type: SystemMessageType;
+  isActive: boolean;
+  createdBy?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
 export type School = {
   id: string;
   schoolNumber: string;
@@ -225,6 +241,7 @@ export type ReportDefinition = {
   subreportQuery?: string;
   subreportKeyColumn?: string | null;
   columns?: string[];
+  additionalColumns?: string[];
   createdBy?: string | null;
   createdAt?: string;
   updatedAt?: string;
@@ -244,7 +261,7 @@ export type GenericReportRowWithSubreport = GenericReportRow & {
 };
 
 export type GenericReportRun = {
-  report: { id: string; title: string; description: string; sectionTitle?: string; highlightRules?: ReportHighlightRule[] };
+  report: { id: string; title: string; description: string; sectionTitle?: string; highlightRules?: ReportHighlightRule[]; additionalColumns?: string[] };
   organization: string;
   columns: string[];
   rows: GenericReportRowWithSubreport[];

@@ -719,6 +719,7 @@ export const openApiDocument = {
           subreportQuery: { type: 'string', description: 'Optional child (subreport) query. Only returned to admins' },
           subreportKeyColumn: { type: 'string', nullable: true, description: 'Main-row column bound to the subreport :person_id' },
           columns: { type: 'array', items: { type: 'string' }, description: 'Optional curated MAIN display columns (defaults to driver columns)' },
+          additionalColumns: { type: 'array', items: { type: 'string' }, description: 'Optional blank columns appended to the end of the Excel export' },
           createdBy: { type: 'string' },
           createdAt: { type: 'string' },
           updatedAt: { type: 'string' }
@@ -737,7 +738,8 @@ export const openApiDocument = {
           highlightRules: { type: 'array', items: { $ref: '#/components/schemas/ReportHighlightRule' }, maxItems: 10 },
           subreportQuery: { type: 'string', description: 'Optional child (subreport) query with a :person_id bind' },
           subreportKeyColumn: { type: 'string', nullable: true, description: 'Main-row column bound to the subreport :person_id' },
-          columns: { type: 'array', items: { type: 'string' }, maxItems: 200, description: 'Curated MAIN display columns (omit person_id to hide it)' }
+          columns: { type: 'array', items: { type: 'string' }, maxItems: 200, description: 'Curated MAIN display columns (omit person_id to hide it)' },
+          additionalColumns: { type: 'array', items: { type: 'string' }, maxItems: 200, description: 'Optional blank columns appended to the end of the Excel export' }
         }
       },
       ValidateSqlRequest: {

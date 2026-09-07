@@ -312,8 +312,12 @@ function ReportsTab({ session, schools, sections, reports, refresh }: { session:
     return reports.filter((report) => `${report.title} ${report.description} ${report.sectionTitle ?? ''}`.toLowerCase().includes(needle));
   }, [reports, filter]);
 
+  function parseColumnList(value: string): string[] {
+    return value.split(/[,\n]/).map((item) => item.trim()).filter(Boolean);
+  }
+
   function startNew() {
-    setEditing({ sectionId: sections[0]?.id ?? '', title: '', description: '', sqlQuery: 'SELECT 1 AS example WHERE :organization = :organization', status: 'inactive', highlightRules: [], subreportQuery: '', subreportKeyColumn: 'person_id', columns: [] });
+    setEditing({ sectionId: sections[0]?.id ?? '', title: '', description: '', sqlQuery: 'SELECT 1 AS example WHERE :organization = :organization', status: 'inactive', highlightRules: [], subreportQuery: '', subreportKeyColumn: 'person_id', columns: [], additionalColumns: [] });
     setEditorTab('general');
     setValidateState('idle');
     setPreview(null);
@@ -322,7 +326,7 @@ function ReportsTab({ session, schools, sections, reports, refresh }: { session:
   }
 
   function startEdit(report: ReportDefinition) {
-    setEditing({ ...report, highlightRules: report.highlightRules ?? [], subreportQuery: report.subreportQuery ?? '', subreportKeyColumn: report.subreportKeyColumn ?? 'person_id', columns: report.columns ?? [] });
+    setEditing({ ...report, highlightRules: report.highlightRules ?? [], subreportQuery: report.subreportQuery ?? '', subreportKeyColumn: report.subreportKeyColumn ?? 'person_id', columns: report.columns ?? [], additionalColumns: report.additionalColumns ?? [] });
     setEditorTab('general');
     setValidateState('idle');
     setPreview(null);
@@ -359,6 +363,7 @@ function ReportsTab({ session, schools, sections, reports, refresh }: { session:
     const subreportQuery = (editing.subreportQuery ?? '').trim();
     const subreportKeyColumn = subreportQuery ? (editing.subreportKeyColumn ?? 'person_id').trim() || null : null;
     const columns = (editing.columns ?? []).filter((c) => c.trim()).length > 0 ? (editing.columns ?? []).filter((c) => c.trim()) : undefined;
+    const additionalColumns = (editing.additionalColumns ?? []).map((c) => c.trim()).filter(Boolean).length > 0 ? (editing.additionalColumns ?? []).map((c) => c.trim()).filter(Boolean) : undefined;
     try {
       if (editing.id) {
         await updateReport(session, editing.id, {
@@ -370,7 +375,8 @@ function ReportsTab({ session, schools, sections, reports, refresh }: { session:
           highlightRules: rules,
           subreportQuery: subreportQuery || undefined,
           subreportKeyColumn: subreportKeyColumn,
-          columns: columns
+          columns: columns,
+          additionalColumns: additionalColumns
         });
         setNotice('Report updated.');
       } else {
@@ -383,7 +389,8 @@ function ReportsTab({ session, schools, sections, reports, refresh }: { session:
           highlightRules: rules,
           subreportQuery: subreportQuery || undefined,
           subreportKeyColumn: subreportKeyColumn,
-          columns: columns
+          columns: columns,
+          additionalColumns: additionalColumns
         });
         setNotice('Report created.');
       }
@@ -564,6 +571,18 @@ function ReportsTab({ session, schools, sections, reports, refresh }: { session:
           </div>}
         </div>
       </> : <>
+        <div className="settings-field"><span>Additional Columns (comma-delimited, optional)</span>
+          <p className="highlight-desc">Blank columns appended to the end of the Excel export. Leave blank for none.</p>
+          <label className="settings-field">
+            <textarea
+              value={(editing.additionalColumns ?? []).join(', ')}
+              onChange={(event) => setEditing({ ...editing, additionalColumns: parseColumnList(event.target.value) })}
+              rows={2}
+              spellCheck={false}
+              placeholder="effective_date, classroom_assign"
+            />
+          </label>
+        </div>
         <div className="settings-field"><span>Subreport (optional)</span>
           <p className="highlight-desc">Add a child query that runs once per main row, bound to the row's key column. Child queries must be read-only and reference <code>:person_id</code>.</p>
           <label className="settings-field">

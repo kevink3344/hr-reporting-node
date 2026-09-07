@@ -165,6 +165,25 @@ export type ReportSection = {
   updatedAt?: string;
 };
 
+// ---- System-wide messages (Splash / Banner) ----
+// Admin-authored announcements shown to every user. `type` drives the renderer:
+// 'splash' = large overlay on login, 'banner' = dismissible top strip. The
+// `title` is an admin-only row label (and the splash heading); banners show
+// it as a heading too. Persisted in `system_messages` (Turso/SQLite dev,
+// MySQL prod); fixtures serve an in-memory seed.
+export type SystemMessageType = 'splash' | 'banner';
+
+export type SystemMessage = {
+  id: string;
+  title: string;
+  message: string;
+  type: SystemMessageType;
+  isActive: boolean;
+  createdBy?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
 export type ReportStatus = 'active' | 'inactive';
 
 export type HighlightOperator = 'eq' | 'neq' | 'contains' | 'not_contains' | 'is_empty' | 'is_not_empty';
@@ -203,6 +222,8 @@ export type ReportDefinition = {
   subreportKeyColumn?: string | null;
   /** Optional curated MAIN display columns (empty/undefined = driver metadata). */
   columns?: string[];
+  /** Optional blank columns appended to the end of the Excel export. */
+  additionalColumns?: string[];
   createdBy?: string | null;
   createdAt?: string;
   updatedAt?: string;
@@ -222,7 +243,7 @@ export type GenericReportRowWithSubreport = GenericReportRow & {
 };
 
 export type GenericReportRun = {
-  report: { id: string; title: string; description: string; sectionTitle?: string; highlightRules?: ReportHighlightRule[] };
+  report: { id: string; title: string; description: string; sectionTitle?: string; highlightRules?: ReportHighlightRule[]; additionalColumns?: string[] };
   organization: string;
   columns: string[];
   rows: GenericReportRowWithSubreport[];

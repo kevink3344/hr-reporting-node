@@ -16,6 +16,8 @@ import type {
   ReportViewInviteStatus,
   ReportViewVisibility,
   School,
+  SystemMessage,
+  SystemMessageType,
   ViewDefinition
 } from '../types.js';
 
@@ -70,6 +72,7 @@ export type ReportDefinitionInput = {
   subreportQuery?: string;
   subreportKeyColumn?: string | null;
   columns?: string[];
+  additionalColumns?: string[];
   createdBy?: string;
 };
 
@@ -84,6 +87,7 @@ export type ReportDefinitionUpdate = {
   subreportQuery?: string;
   subreportKeyColumn?: string | null;
   columns?: string[];
+  additionalColumns?: string[];
 };
 
 export type ReportListFilter = {
@@ -208,6 +212,30 @@ export interface PositionCommentsRepository {
   delete(commentId: string, authorId: string): Promise<boolean>;
 }
 
+export type SystemMessageInput = {
+  title: string;
+  message: string;
+  type: SystemMessageType;
+  isActive?: boolean;
+  createdBy?: string | null;
+};
+
+export type SystemMessageUpdate = {
+  title?: string;
+  message?: string;
+  type?: SystemMessageType;
+  isActive?: boolean;
+};
+
+export interface SystemMessagesRepository {
+  listActive(): Promise<SystemMessage[]>;
+  listAll(): Promise<SystemMessage[]>;
+  getById(id: string): Promise<SystemMessage | null>;
+  create(input: SystemMessageInput): Promise<SystemMessage>;
+  update(id: string, patch: SystemMessageUpdate): Promise<SystemMessage | null>;
+  delete(id: string): Promise<boolean>;
+}
+
 export type Repositories = {
   people: PeopleRepository;
   schools: SchoolsRepository;
@@ -221,4 +249,5 @@ export type Repositories = {
   reportViewComments: ReportViewCommentsRepository;
   positionPins: PositionPinsRepository;
   positionComments: PositionCommentsRepository;
+  systemMessages: SystemMessagesRepository;
 };

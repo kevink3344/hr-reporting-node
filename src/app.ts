@@ -48,7 +48,8 @@ const reportDefinitionSchema = z.object({
   highlightRules: reportHighlightRulesSchema.optional(),
   subreportQuery: z.string().trim().max(20000).optional(),
   subreportKeyColumn: z.string().trim().min(1).max(64).nullable().optional(),
-  columns: z.array(z.string().trim().min(1).max(64)).max(200).optional()
+  columns: z.array(z.string().trim().min(1).max(64)).max(200).optional(),
+  additionalColumns: z.array(z.string().trim().min(1).max(64)).max(200).optional()
 });
 
 const reportDefinitionPatchSchema = reportDefinitionSchema.partial();
@@ -144,7 +145,13 @@ function repoErrorToStatus(error: unknown): { status: number; body: { error: str
     case 'VIEW_NOT_FOUND':
     case 'INVITE_NOT_FOUND':
     case 'COMMENT_NOT_FOUND':
+    case 'MESSAGE_NOT_FOUND':
       return { status: 404, body: { error: code } };
+    case 'MESSAGE_REQUIRED':
+    case 'MESSAGE_TOO_LONG':
+      return { status: 400, body: { error: code } };
+    case 'SPLASH_ALREADY_ACTIVE':
+      return { status: 409, body: { error: code } };
     default:
       return { status: 500, body: { error: 'INTERNAL_SERVER_ERROR' } };
   }
@@ -162,6 +169,15 @@ const positionCommentInputSchema = z.object({
   organization: z.string().trim().min(1).max(200),
   body: z.string().trim().min(1).max(2000)
 });
+
+const systemMessageSchema = z.object({
+  title: z.string().trim().max(200),
+  message: z.string().trim().min(1).max(2000),
+  type: z.enum(['splash', 'banner']),
+  isActive: z.boolean().optional().default(true)
+});
+
+const systemMessagePatchSchema = systemMessageSchema.partial();
 
 export function createApp(repositories: Repositories = fixtureRepositories) {
   const application = express();
@@ -388,6 +404,7 @@ export function createApp(repositories: Repositories = fixtureRepositories) {
         subreportQuery: input.subreportQuery,
         subreportKeyColumn: input.subreportKeyColumn ?? null,
         columns: input.columns,
+        additionalColumns: input.additionalColumns,
         createdBy: callerName(request)
       });
       response.status(201).json(created);
@@ -427,7 +444,8 @@ export function createApp(repositories: Repositories = fixtureRepositories) {
         highlightRules: patch.highlightRules,
         subreportQuery: patch.subreportQuery,
         subreportKeyColumn: patch.subreportKeyColumn ?? null,
-        columns: patch.columns
+        columns: patch.columns,
+        additionalColumns: patch.additionalColumns
       });
       if (!updated) {
         response.status(404).json({ error: 'REPORT_NOT_FOUND' });
@@ -946,6 +964,75 @@ export function createApp(repositories: Repositories = fixtureRepositories) {
       const commentId = routeId(request.params.commentId);
       const removed = await repositories.positionComments.delete(commentId, callerId(request));
       if (!removed) { response.status(404).json({ error: 'COMMENT_NOT_FOUND' }); return; }
+      response.status(204).end();
+    } catch (error) {
+      const mapped = repoErrorToStatus(error);
+      if (mapped.status !== 500) { response.status(mapped.status).json(mapped.body); return; }
+      next(error);
+    }
+  });
+
+  // ---- System-wide messages (Splash / Banner) ----
+  // Any authenticated user reads active announcements; admins CRUD all.
+  application.get('/api/system-messages', async (_request, response, next) => {
+    try {
+      const messages = await repositories.systemMessages.listActive();
+      response.json(messages);
+    } catch (error) {
+      const mapped = repoErrorToStatus(error);
+      if (mapped.status !== 500) { response.status(mapped.status).json(mapped.body); return; }
+      next(error);
+    }
+  });
+
+  application.get('/api/system-messages/all', requireAdmin, async (_request, response, next) => {
+    try {
+      const messages = await repositories.systemMessages.listAll();
+      response.json(messages);
+    } catch (error) {
+      const mapped = repoErrorToStatus(error);
+      if (mapped.status !== 500) { response.status(mapped.status).json(mapped.body); return; }
+      next(error);
+    }
+  });
+
+  application.post('/api/system-messages', requireAdmin, async (request, response, next) => {
+    try {
+      const input = systemMessageSchema.parse(request.body);
+      const created = await repositories.systemMessages.create({
+        title: input.title,
+        message: input.message,
+        type: input.type,
+        isActive: input.isActive,
+        createdBy: callerId(request)
+      });
+      response.status(201).json(created);
+    } catch (error) {
+      const mapped = repoErrorToStatus(error);
+      if (mapped.status !== 500) { response.status(mapped.status).json(mapped.body); return; }
+      next(error);
+    }
+  });
+
+  application.patch('/api/system-messages/:id', requireAdmin, async (request, response, next) => {
+    try {
+      const id = routeId(request.params.id);
+      const patch = systemMessagePatchSchema.parse(request.body);
+      const updated = await repositories.systemMessages.update(id, patch);
+      if (!updated) { response.status(404).json({ error: 'MESSAGE_NOT_FOUND' }); return; }
+      response.json(updated);
+    } catch (error) {
+      const mapped = repoErrorToStatus(error);
+      if (mapped.status !== 500) { response.status(mapped.status).json(mapped.body); return; }
+      next(error);
+    }
+  });
+
+  application.delete('/api/system-messages/:id', requireAdmin, async (request, response, next) => {
+    try {
+      const id = routeId(request.params.id);
+      const removed = await repositories.systemMessages.delete(id);
+      if (!removed) { response.status(404).json({ error: 'MESSAGE_NOT_FOUND' }); return; }
       response.status(204).end();
     } catch (error) {
       const mapped = repoErrorToStatus(error);

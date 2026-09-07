@@ -47,6 +47,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_reports_section_title ON reports (section_
 ALTER TABLE reports ADD COLUMN subreport_query TEXT;
 ALTER TABLE reports ADD COLUMN subreport_key_column TEXT;
 ALTER TABLE reports ADD COLUMN columns TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE reports ADD COLUMN additional_columns TEXT NOT NULL DEFAULT '[]';
 
 -- ---------------------------------------------------------------------
 -- Seed: migrate the 5 legacy catalog section titles + 21 catalog entries.

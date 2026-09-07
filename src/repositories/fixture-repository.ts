@@ -14,6 +14,8 @@ import type {
   ReportViewComment,
   ReportViewInvite,
   School,
+  SystemMessage,
+  SystemMessageType,
   ViewDefinition
 } from '../types.js';
 import type {
@@ -29,7 +31,9 @@ import type {
   ReportViewInput,
   ReportViewInviteInput,
   ReportViewListFilter,
-  ReportViewUpdate
+  ReportViewUpdate,
+  SystemMessageInput,
+  SystemMessageUpdate
 } from './contracts.js';
 import { REPORT_ROW_CAP, bindOrganization, newId, nowIso, validateReportSql, validateSubreportSql } from '../reports-sql.js';
 import { parseHighlightRules, reportHighlightRulesSchema } from '../report-highlight.js';
@@ -262,7 +266,7 @@ function toOpenPositionRun(report: ReportDefinition, organization: string): Gene
     .map((row) => ({ ...row }) as unknown as Record<string, unknown>);
   const columns = rows.length > 0 ? Object.keys(rows[0]) : ['posStart', 'posName', 'organization'];
   return {
-    report: { id: report.id, title: report.title, description: report.description, sectionTitle: report.sectionTitle, highlightRules: report.highlightRules },
+    report: { id: report.id, title: report.title, description: report.description, sectionTitle: report.sectionTitle, highlightRules: report.highlightRules, additionalColumns: report.additionalColumns },
     organization,
     columns,
     rows: rows.slice(0, REPORT_ROW_CAP),
@@ -384,6 +388,7 @@ export const fixtureRepositories: Repositories = {
         subreportQuery: input.subreportQuery?.trim() || undefined,
         subreportKeyColumn: input.subreportKeyColumn?.trim() || null,
         columns: input.columns && input.columns.length > 0 ? input.columns : undefined,
+        additionalColumns: input.additionalColumns && input.additionalColumns.length > 0 ? input.additionalColumns : undefined,
         createdBy: input.createdBy ?? null,
         createdAt: nowIso(),
         updatedAt: nowIso()
@@ -428,6 +433,7 @@ export const fixtureRepositories: Repositories = {
       if (patch.rowKeyColumn !== undefined) report.rowKeyColumn = patch.rowKeyColumn;
       if (patch.subreportKeyColumn !== undefined) report.subreportKeyColumn = patch.subreportKeyColumn?.trim() || null;
       if (patch.columns !== undefined) report.columns = patch.columns.length > 0 ? patch.columns : undefined;
+      if (patch.additionalColumns !== undefined) report.additionalColumns = patch.additionalColumns.length > 0 ? patch.additionalColumns : undefined;
       report.updatedAt = nowIso();
       return { ...report };
     },
@@ -457,7 +463,7 @@ export const fixtureRepositories: Repositories = {
         ? { keyColumn: report.subreportKeyColumn }
         : null;
       return {
-        report: { id: report.id, title: report.title, description: report.description, sectionTitle: report.sectionTitle },
+        report: { id: report.id, title: report.title, description: report.description, sectionTitle: report.sectionTitle, additionalColumns: report.additionalColumns },
         organization,
         columns: report.columns && report.columns.length > 0 ? report.columns : [],
         rows: [],
@@ -475,7 +481,8 @@ export const fixtureRepositories: Repositories = {
   reportViewInvites: buildFixtureReportViewInvites(),
   reportViewComments: buildFixtureReportViewComments(),
   positionPins: buildFixturePositionPins(),
-  positionComments: buildFixturePositionComments()
+  positionComments: buildFixturePositionComments(),
+  systemMessages: buildFixtureSystemMessages()
 };
 
 function buildFixtureReportViews(): Repositories['reportViews'] {
@@ -770,6 +777,83 @@ function buildFixturePositionComments(): Repositories['positionComments'] {
       const idx = fixturePositionComments.findIndex((comment) => comment.id === commentId && comment.authorId === authorId);
       if (idx === -1) return false;
       fixturePositionComments.splice(idx, 1);
+      return true;
+    }
+  };
+}
+
+// ---- System-wide messages (Splash / Banner) ----
+const fixtureSystemMessages: SystemMessage[] = [];
+
+function validateSystemMessageBody(message: string): void {
+  const body = message.trim();
+  if (!body) throw Object.assign(new Error('MESSAGE_REQUIRED'), { code: 'MESSAGE_REQUIRED' });
+  if (body.length > 2000) throw Object.assign(new Error('MESSAGE_TOO_LONG'), { code: 'MESSAGE_TOO_LONG' });
+}
+
+function assertNoDuplicateSplash(type: SystemMessageType, ignoreId?: string): void {
+  if (type !== 'splash') return;
+  if (fixtureSystemMessages.some((message) => message.type === 'splash' && message.isActive && message.id !== ignoreId)) {
+    throw Object.assign(new Error('SPLASH_ALREADY_ACTIVE'), { code: 'SPLASH_ALREADY_ACTIVE' });
+  }
+}
+
+function buildFixtureSystemMessages(): Repositories['systemMessages'] {
+  return {
+    async listActive() {
+      return fixtureSystemMessages
+        .filter((message) => message.isActive)
+        .slice()
+        .sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''))
+        .map((message) => ({ ...message }));
+    },
+    async listAll() {
+      return fixtureSystemMessages
+        .slice()
+        .sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''))
+        .map((message) => ({ ...message }));
+    },
+    async getById(id) {
+      const message = fixtureSystemMessages.find((candidate) => candidate.id === id);
+      return message ? { ...message } : null;
+    },
+    async create(input: SystemMessageInput) {
+      validateSystemMessageBody(input.message);
+      assertNoDuplicateSplash(input.type);
+      const now = nowIso();
+      const message: SystemMessage = {
+        id: newId(),
+        title: input.title.trim(),
+        message: input.message.trim(),
+        type: input.type,
+        isActive: input.isActive ?? true,
+        createdBy: input.createdBy ?? null,
+        createdAt: now,
+        updatedAt: now
+      };
+      fixtureSystemMessages.push(message);
+      return { ...message };
+    },
+    async update(id, patch: SystemMessageUpdate) {
+      const message = fixtureSystemMessages.find((candidate) => candidate.id === id);
+      if (!message) return null;
+      if (patch.message !== undefined) validateSystemMessageBody(patch.message);
+      if (patch.type !== undefined) assertNoDuplicateSplash(patch.type, id);
+      if (patch.title !== undefined) message.title = patch.title.trim();
+      if (patch.message !== undefined) message.message = patch.message.trim();
+      if (patch.type !== undefined) message.type = patch.type;
+      if (patch.isActive !== undefined) {
+        // If re-activating a splash, ensure no other active splash exists.
+        if (patch.isActive) assertNoDuplicateSplash(message.type, id);
+        message.isActive = patch.isActive;
+      }
+      message.updatedAt = nowIso();
+      return { ...message };
+    },
+    async delete(id) {
+      const idx = fixtureSystemMessages.findIndex((candidate) => candidate.id === id);
+      if (idx === -1) return false;
+      fixtureSystemMessages.splice(idx, 1);
       return true;
     }
   };

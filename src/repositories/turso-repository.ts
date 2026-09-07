@@ -14,6 +14,8 @@ import type {
   ReportViewComment,
   ReportViewInvite,
   School,
+  SystemMessage,
+  SystemMessageType,
   ViewDefinition
 } from '../types.js';
 import type {
@@ -29,7 +31,9 @@ import type {
   ReportViewInput,
   ReportViewInviteInput,
   ReportViewListFilter,
-  ReportViewUpdate
+  ReportViewUpdate,
+  SystemMessageInput,
+  SystemMessageUpdate
 } from './contracts.js';
 import { getLibsqlClient, query } from '../db-turso.js';
 import { viewDefinitionSchema } from '../report-views.js';
@@ -603,13 +607,14 @@ export const tursoRepositories: Repositories = {
         subreportQuery: input.subreportQuery?.trim() || undefined,
         subreportKeyColumn: input.subreportKeyColumn?.trim() || null,
         columns: input.columns && input.columns.length > 0 ? input.columns : undefined,
+        additionalColumns: input.additionalColumns && input.additionalColumns.length > 0 ? input.additionalColumns : undefined,
         createdBy: input.createdBy ?? null,
         createdAt: now,
         updatedAt: now
       };
       await query(
-        'INSERT INTO reports (id, section_id, title, description, sql_query, status, highlight_rules, subreport_query, subreport_key_column, columns, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        [report.id, report.sectionId, report.title, report.description, dbValue(report.sqlQuery), report.status, JSON.stringify(highlightRules ?? []), dbValue(report.subreportQuery), dbValue(report.subreportKeyColumn), dbValue(report.columns ? JSON.stringify(report.columns) : undefined), dbValue(report.createdBy), dbValue(report.createdAt), dbValue(report.updatedAt)]
+        'INSERT INTO reports (id, section_id, title, description, sql_query, status, highlight_rules, subreport_query, subreport_key_column, columns, additional_columns, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [report.id, report.sectionId, report.title, report.description, dbValue(report.sqlQuery), report.status, JSON.stringify(highlightRules ?? []), dbValue(report.subreportQuery), dbValue(report.subreportKeyColumn), dbValue(report.columns ? JSON.stringify(report.columns) : undefined), dbValue(report.additionalColumns ? JSON.stringify(report.additionalColumns) : undefined), dbValue(report.createdBy), dbValue(report.createdAt), dbValue(report.updatedAt)]
       );
       return report;
     },
@@ -654,11 +659,14 @@ export const tursoRepositories: Repositories = {
       const nextColumns = patch.columns !== undefined
         ? (patch.columns.length > 0 ? patch.columns : undefined)
         : parseColumns((current as ReportRow).columns);
+      const nextAdditionalColumns = patch.additionalColumns !== undefined
+        ? (patch.additionalColumns.length > 0 ? patch.additionalColumns : undefined)
+        : parseColumns((current as ReportRow).additional_columns);
       const nextStatus = patch.status ?? current.status;
       const updatedAt = nowIso();
       await query(
-        'UPDATE reports SET section_id = ?, title = ?, description = ?, sql_query = ?, status = ?, highlight_rules = ?, subreport_query = ?, subreport_key_column = ?, columns = ?, updated_at = ? WHERE id = ?',
-        [nextSectionId, nextTitle, nextDescription, nextSql, nextStatus, JSON.stringify(nextHighlightRules ?? []), dbValue(nextSubreportQuery), dbValue(nextSubreportKeyColumn), dbValue(nextColumns ? JSON.stringify(nextColumns) : undefined), updatedAt, id]
+        'UPDATE reports SET section_id = ?, title = ?, description = ?, sql_query = ?, status = ?, highlight_rules = ?, subreport_query = ?, subreport_key_column = ?, columns = ?, additional_columns = ?, updated_at = ? WHERE id = ?',
+        [nextSectionId, nextTitle, nextDescription, nextSql, nextStatus, JSON.stringify(nextHighlightRules ?? []), dbValue(nextSubreportQuery), dbValue(nextSubreportKeyColumn), dbValue(nextColumns ? JSON.stringify(nextColumns) : undefined), dbValue(nextAdditionalColumns ? JSON.stringify(nextAdditionalColumns) : undefined), updatedAt, id]
       );
       const refreshed = await query<ReportRow>(
         `SELECT r.*, s.title AS section_title FROM reports r
@@ -731,7 +739,7 @@ export const tursoRepositories: Repositories = {
       }
 
       return {
-        report: { id: report.id, title: report.title, description: report.description, sectionTitle: report.sectionTitle, highlightRules: report.highlightRules },
+        report: { id: report.id, title: report.title, description: report.description, sectionTitle: report.sectionTitle, highlightRules: report.highlightRules, additionalColumns: report.additionalColumns },
         organization,
         columns: report.columns && report.columns.length > 0 ? report.columns : columns,
         rows: mainRows,
@@ -1019,8 +1027,116 @@ export const tursoRepositories: Repositories = {
       await query('DELETE FROM position_comments WHERE id = ?', [commentId]);
       return true;
     }
+  },
+  systemMessages: {
+    async listActive() {
+      const rows = await query<SystemMessageRow>(
+        'SELECT * FROM system_messages WHERE is_active = 1 ORDER BY updated_at DESC',
+        []
+      );
+      return rows.map(toSystemMessage);
+    },
+    async listAll() {
+      const rows = await query<SystemMessageRow>(
+        'SELECT * FROM system_messages ORDER BY updated_at DESC',
+        []
+      );
+      return rows.map(toSystemMessage);
+    },
+    async getById(id) {
+      const rows = await query<SystemMessageRow>('SELECT * FROM system_messages WHERE id = ? LIMIT 1', [id]);
+      return rows[0] ? toSystemMessage(rows[0]) : null;
+    },
+    async create(input: SystemMessageInput) {
+      const body = input.message.trim();
+      const title = input.title.trim();
+      if (!body) throw codedError('MESSAGE_REQUIRED');
+      if (body.length > 2000) throw codedError('MESSAGE_TOO_LONG');
+      await assertNoDuplicateSplash(input.type);
+      const id = newId();
+      const now = nowIso();
+      await query(
+        'INSERT INTO system_messages (id, title, message, type, is_active, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        [id, title, body, input.type, input.isActive === false ? 0 : 1, dbValue(input.createdBy ?? null), now, now]
+      );
+      const created = await query<SystemMessageRow>('SELECT * FROM system_messages WHERE id = ? LIMIT 1', [id]);
+      return toSystemMessage(created[0]);
+    },
+    async update(id, patch: SystemMessageUpdate) {
+      const existing = await query<SystemMessageRow>('SELECT * FROM system_messages WHERE id = ? LIMIT 1', [id]);
+      if (!existing[0]) return null;
+      if (patch.message !== undefined) {
+        const body = patch.message.trim();
+        if (!body) throw codedError('MESSAGE_REQUIRED');
+        if (body.length > 2000) throw codedError('MESSAGE_TOO_LONG');
+      }
+      const nextType = patch.type ?? existing[0].type;
+      const nextIsActive = patch.isActive === undefined ? (existing[0].is_active ?? 1) === 1 : patch.isActive;
+      if (nextIsActive) await assertNoDuplicateSplash(nextType, id);
+      const now = nowIso();
+      await query(
+        `UPDATE system_messages SET
+          title = ?,
+          message = ?,
+          type = ?,
+          is_active = ?,
+          updated_at = ?
+        WHERE id = ?`,
+        [
+          patch.title !== undefined ? patch.title.trim() : existing[0].title,
+          patch.message !== undefined ? patch.message.trim() : existing[0].message,
+          nextType,
+          nextIsActive ? 1 : 0,
+          now,
+          id
+        ]
+      );
+      const updated = await query<SystemMessageRow>('SELECT * FROM system_messages WHERE id = ? LIMIT 1', [id]);
+      return toSystemMessage(updated[0]);
+    },
+    async delete(id) {
+      const rows = await query<SystemMessageRow>('SELECT * FROM system_messages WHERE id = ? LIMIT 1', [id]);
+      if (!rows[0]) return false;
+      await query('DELETE FROM system_messages WHERE id = ?', [id]);
+      return true;
+    }
   }
 };
+
+type SystemMessageRow = {
+  id: string;
+  title: string | null;
+  message: string;
+  type: string;
+  is_active: number | null;
+  created_by: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+function toSystemMessage(row: SystemMessageRow): SystemMessage {
+  return {
+    id: String(row.id),
+    title: row.title ?? '',
+    message: row.message,
+    type: (row.type === 'splash' ? 'splash' : 'banner') as SystemMessageType,
+    isActive: (row.is_active ?? 1) === 1,
+    createdBy: row.created_by ?? undefined,
+    createdAt: row.created_at ?? undefined,
+    updatedAt: row.updated_at ?? undefined
+  };
+}
+
+async function assertNoDuplicateSplash(type: string, ignoreId?: string): Promise<void> {
+  if (type !== 'splash') return;
+  const splash = await query<SystemMessageRow>(
+    ignoreId
+      ? 'SELECT 1 FROM system_messages WHERE type = ? AND is_active = 1 AND id != ? LIMIT 1'
+      : 'SELECT 1 FROM system_messages WHERE type = ? AND is_active = 1 LIMIT 1',
+    ignoreId ? ['splash', ignoreId] : ['splash']
+  );
+  if (splash[0]) throw codedError('SPLASH_ALREADY_ACTIVE');
+}
 
 type SectionRow = {
   id: string;
@@ -1047,6 +1163,7 @@ type ReportRow = {
   subreport_query?: string | null;
   subreport_key_column?: string | null;
   columns?: string | null;
+  additional_columns?: string | null;
 };
 
 function toSection(row: SectionRow): ReportSection {
@@ -1075,6 +1192,7 @@ function toReport(row: ReportRow): ReportDefinition {
     subreportQuery: row.subreport_query ?? undefined,
     subreportKeyColumn: row.subreport_key_column ?? null,
     columns: parseColumns((row as ReportRow).columns),
+    additionalColumns: parseColumns((row as ReportRow).additional_columns),
     createdBy: row.created_by ?? null,
     createdAt: row.created_at ?? undefined,
     updatedAt: row.updated_at ?? undefined

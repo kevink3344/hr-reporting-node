@@ -13,6 +13,8 @@ import type {
   ReportViewComment,
   ReportViewInvite,
   School,
+  SystemMessage,
+  SystemMessageType,
   ViewDefinition,
 } from './types';
 
@@ -120,7 +122,7 @@ export function getReport(session: LoginSession | null | undefined, id: string):
   return request<ReportDefinition>(`/api/reports/${encodeURIComponent(id)}`, { headers: adminHeaders(session) });
 }
 
-export function createReport(session: LoginSession, input: { sectionId: string; title: string; description?: string; sqlQuery: string; status?: 'active' | 'inactive'; highlightRules?: unknown; subreportQuery?: string; subreportKeyColumn?: string | null; columns?: string[] }): Promise<ReportDefinition> {
+export function createReport(session: LoginSession, input: { sectionId: string; title: string; description?: string; sqlQuery: string; status?: 'active' | 'inactive'; highlightRules?: unknown; subreportQuery?: string; subreportKeyColumn?: string | null; columns?: string[]; additionalColumns?: string[] }): Promise<ReportDefinition> {
   return request<ReportDefinition>('/api/reports', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...adminHeaders(session) },
@@ -128,7 +130,7 @@ export function createReport(session: LoginSession, input: { sectionId: string; 
   });
 }
 
-export function updateReport(session: LoginSession, id: string, patch: { sectionId?: string; title?: string; description?: string; sqlQuery?: string; status?: 'active' | 'inactive'; highlightRules?: unknown; subreportQuery?: string; subreportKeyColumn?: string | null; columns?: string[] }): Promise<ReportDefinition> {
+export function updateReport(session: LoginSession, id: string, patch: { sectionId?: string; title?: string; description?: string; sqlQuery?: string; status?: 'active' | 'inactive'; highlightRules?: unknown; subreportQuery?: string; subreportKeyColumn?: string | null; columns?: string[]; additionalColumns?: string[] }): Promise<ReportDefinition> {
   return request<ReportDefinition>(`/api/reports/${encodeURIComponent(id)}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json', ...adminHeaders(session) },
@@ -374,5 +376,44 @@ export function deletePositionComment(session: LoginSession, posNumber: string, 
   return request<void>(`/api/positions/${encodeURIComponent(posNumber)}/comments/${encodeURIComponent(commentId)}`, {
     method: 'DELETE',
     headers: viewHeaders(session)
+  });
+}
+
+// ---- System-wide messages (Splash / Banner) ----
+export function getSystemMessages(session: LoginSession | null | undefined): Promise<SystemMessage[]> {
+  return request<SystemMessage[]>('/api/system-messages', { headers: viewHeaders(session) });
+}
+
+export function getSystemMessagesAll(session: LoginSession): Promise<SystemMessage[]> {
+  return request<SystemMessage[]>('/api/system-messages/all', { headers: adminHeaders(session) });
+}
+
+export function createSystemMessage(
+  session: LoginSession,
+  input: { title: string; message: string; type: SystemMessageType; isActive?: boolean }
+): Promise<SystemMessage> {
+  return request<SystemMessage>('/api/system-messages', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...adminHeaders(session) },
+    body: JSON.stringify(input)
+  });
+}
+
+export function updateSystemMessage(
+  session: LoginSession,
+  id: string,
+  patch: { title?: string; message?: string; type?: SystemMessageType; isActive?: boolean }
+): Promise<SystemMessage> {
+  return request<SystemMessage>(`/api/system-messages/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...adminHeaders(session) },
+    body: JSON.stringify(patch)
+  });
+}
+
+export function deleteSystemMessage(session: LoginSession, id: string): Promise<void> {
+  return request<void>(`/api/system-messages/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: adminHeaders(session)
   });
 }
