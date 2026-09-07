@@ -217,7 +217,15 @@ for (const p of people) {
   // report's contract_id column is never blank for a filled position.
   const contractIdValue = esc(contractTypeVal);
   const contractTypeColVal = esc(contractTypeVal);
-  const tenureCodeVal = isNonMatchingDemo ? safeCodes[p.id % safeCodes.length] : contractCodes[p.id % contractCodes.length];
+  let tenureCodeVal = isNonMatchingDemo ? safeCodes[p.id % safeCodes.length] : contractCodes[p.id % contractCodes.length];
+  // Real-data accuracy: rows whose contract_desc is "Terminating" carry contract code 9999.
+  if (tenureDescVal === 'Terminating') {
+    tenureCodeVal = '9999';
+  }
+  // Demo accuracy: rows whose contract_type is "1Y" (One Year Contract) carry contract code 2027.
+  if (contractTypeVal === '1Y') {
+    tenureCodeVal = '2027';
+  }
   const contractEndValue = esc(p.id === 10016 || p.id === 10020 ? '2028-06-30' : '2027-06-30');
   const classroomVal = classroomValues[p.id % classroomValues.length];
   sql(`INSERT INTO employee_info (` +

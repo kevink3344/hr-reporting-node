@@ -1,8 +1,8 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { AlertCircle, Archive, CheckCircle2, FileText, GripVertical, ListChecks, Pencil, Play, Plus, Settings2, Trash2, X } from 'lucide-react';
 import { createReport, createReportSection, getReports, getReportSections, runReport, updateReport, updateReportSection, validateReportSql } from './api';
-import type { GenericReportRowWithSubreport, GenericSubreportRun, HighlightColorId, HighlightOperator, LoginSession, ReportDefinition, ReportHighlightRule, ReportSection, School } from './types';
-import { HIGHLIGHT_PALETTE, resolveHighlightNeedle } from './types';
+import type { GenericReportRowWithSubreport, GenericSubreportRun, HighlightColorId, HighlightLogic, HighlightOperator, LoginSession, ReportDefinition, ReportHighlightRule, ReportHighlightCondition, ReportSection, School } from './types';
+import { describeHighlightRule, HIGHLIGHT_PALETTE, ruleMatchesRow } from './types';
 
 type Tab = 'sections' | 'reports';
 
@@ -113,6 +113,58 @@ const HIGHLIGHT_OPERATORS: { value: HighlightOperator; label: string }[] = [
   { value: 'is_not_empty', label: 'is not empty' },
 ];
 
+function ColumnSelect({ value, onChange, columns }: { value: string; onChange: (v: string) => void; columns: string[] }) {
+  if (columns.length > 0) {
+    return (
+      <select value={value} onChange={(e) => onChange(e.target.value)} aria-label="Column">
+        {columns.map((c) => <option key={c} value={c}>{c}</option>)}
+        {!columns.includes(value) && value ? <option value={value}>{value} (custom)</option> : null}
+      </select>
+    );
+  }
+  return <input value={value} onChange={(e) => onChange(e.target.value)} placeholder="Column" aria-label="Column" />;
+}
+
+function ConditionRows({ conditions, onChange, columns }: {
+  conditions: ReportHighlightCondition[];
+  onChange: (next: ReportHighlightCondition[]) => void;
+  columns: string[];
+}) {
+  function updateCondition(i: number, patch: Partial<ReportHighlightCondition>) {
+    const next = conditions.slice();
+    next[i] = { ...next[i], ...patch } as ReportHighlightCondition;
+    // Clear value when switching to is_empty / is_not_empty
+    if (patch.operator === 'is_empty' || patch.operator === 'is_not_empty') next[i].value = '';
+    onChange(next);
+  }
+
+  function addCondition() {
+    onChange([...conditions, { column: columns[0] ?? '', operator: 'eq' as HighlightOperator, value: '' }]);
+  }
+
+  function removeCondition(i: number) {
+    onChange(conditions.filter((_, idx) => idx !== i));
+  }
+
+  return <div className="highlight-conditions">
+    {conditions.map((cond, i) => {
+      const needsValue = cond.operator !== 'is_empty' && cond.operator !== 'is_not_empty';
+      return <div className="highlight-condition" key={i}>
+        <span className="highlight-cond-badge">{i === 0 ? 'WHEN' : 'AND/OR'}</span>
+        <ColumnSelect value={cond.column} onChange={(v) => updateCondition(i, { column: v })} columns={columns} />
+        <select value={cond.operator} onChange={(e) => updateCondition(i, { operator: e.target.value as HighlightOperator })} aria-label="Operator">
+          {HIGHLIGHT_OPERATORS.map((op) => <option key={op.value} value={op.value}>{op.label}</option>)}
+        </select>
+        {needsValue && <input value={cond.value} onChange={(e) => updateCondition(i, { value: e.target.value })} placeholder="Value" aria-label="Value" />}
+        <button className="icon-button subtle highlight-delete" onClick={() => removeCondition(i)} aria-label="Remove condition"><X size={14} /></button>
+      </div>;
+    })}
+    {conditions.length < 5 && (
+      <button type="button" className="back-button highlight-add-cond" onClick={addCondition}><Plus size={14} />Add condition</button>
+    )}
+  </div>;
+}
+
 function RowHighlightingEditor({
   rules,
   onChange,
@@ -127,14 +179,12 @@ function RowHighlightingEditor({
   function addRule() {
     if (rules.length >= 10) return;
     const id = typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `rule-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    onChange([...rules, { id, column: columns[0] ?? '', operator: 'eq' as HighlightOperator, value: '', color: 'pastel_red' as HighlightColorId }]);
+    onChange([...rules, { id, logic: 'or', conditions: [{ column: columns[0] ?? '', operator: 'eq' as HighlightOperator, value: '' }], color: 'pastel_red' as HighlightColorId }]);
   }
 
   function updateRule(index: number, patch: Partial<ReportHighlightRule>) {
     const next = rules.slice();
     next[index] = { ...next[index], ...patch } as ReportHighlightRule;
-    // Clear value when switching to is_empty / is_not_empty
-    if (patch.operator === 'is_empty' || patch.operator === 'is_not_empty') next[index].value = '';
     onChange(next);
   }
 
@@ -171,7 +221,6 @@ function RowHighlightingEditor({
 
   return <div className="highlight-rules">
     {rules.map((rule, index) => {
-      const needsValue = rule.operator !== 'is_empty' && rule.operator !== 'is_not_empty';
       const palette = HIGHLIGHT_PALETTE[rule.color];
       return <div
         key={rule.id}
@@ -182,36 +231,41 @@ function RowHighlightingEditor({
         onDrop={(e) => onDrop(e, index)}
         onDragEnd={() => setDragIndex(null)}
       >
-        <span className="highlight-drag" title="Drag to reorder" aria-hidden="true"><GripVertical size={14} /></span>
-        <span className="highlight-when">When</span>
-        {columns.length > 0 ? (
-          <select value={rule.column} onChange={(e) => updateRule(index, { column: e.target.value })} aria-label="Column">
-            {columns.map((c) => <option key={c} value={c}>{c}</option>)}
-            {!columns.includes(rule.column) && rule.column ? <option value={rule.column}>{rule.column} (custom)</option> : null}
-          </select>
-        ) : (
-          <input value={rule.column} onChange={(e) => updateRule(index, { column: e.target.value })} placeholder="Column" aria-label="Column" />
-        )}
-        <select value={rule.operator} onChange={(e) => updateRule(index, { operator: e.target.value as HighlightOperator })} aria-label="Operator">
-          {HIGHLIGHT_OPERATORS.map((op) => <option key={op.value} value={op.value}>{op.label}</option>)}
-        </select>
-        {needsValue && <input value={rule.value} onChange={(e) => updateRule(index, { value: e.target.value })} placeholder="Value" aria-label="Value" />}
-        <label className="highlight-color" title={palette.label}>
-          <span className="highlight-color-dot" style={{ background: palette.bg, borderColor: palette.border }} aria-hidden="true" />
-          <select value={rule.color} onChange={(e) => updateRule(index, { color: e.target.value as HighlightColorId })} aria-label="Color">
-            {(Object.keys(HIGHLIGHT_PALETTE) as HighlightColorId[]).map((cid) => <option key={cid} value={cid}>{HIGHLIGHT_PALETTE[cid].label}</option>)}
-          </select>
-        </label>
-        <button className="icon-button subtle highlight-delete" onClick={() => removeRule(index)} aria-label="Delete rule"><Trash2 size={14} /></button>
-        <span className="highlight-move">
-          <button className="icon-button subtle" onClick={() => moveRule(index, index - 1)} disabled={index === 0} aria-label="Move up">↑</button>
-          <button className="icon-button subtle" onClick={() => moveRule(index, index + 1)} disabled={index === rules.length - 1} aria-label="Move down">↓</button>
-        </span>
+        <div className="highlight-rule-head">
+          <span className="highlight-drag" title="Drag to reorder" aria-hidden="true"><GripVertical size={14} /></span>
+          <span className="highlight-when">Rule {index + 1}</span>
+          <span className="highlight-rule-meta">{describeHighlightRule(rule)}</span>
+          <span className="highlight-spacer" />
+          <label className="highlight-logic" title="Combine conditions">
+            <span className="highlight-logic-label">Match</span>
+            <select value={rule.logic} onChange={(e) => updateRule(index, { logic: e.target.value as HighlightLogic })} aria-label="Logic">
+              <option value="or">any (OR)</option>
+              <option value="and">all (AND)</option>
+            </select>
+          </label>
+          <label className="highlight-color" title={palette.label}>
+            <span className="highlight-color-dot" style={{ background: palette.bg, borderColor: palette.border }} aria-hidden="true" />
+            <select value={rule.color} onChange={(e) => updateRule(index, { color: e.target.value as HighlightColorId })} aria-label="Color">
+              {(Object.keys(HIGHLIGHT_PALETTE) as HighlightColorId[]).map((cid) => <option key={cid} value={cid}>{HIGHLIGHT_PALETTE[cid].label}</option>)}
+            </select>
+          </label>
+          <button className="icon-button subtle highlight-delete" onClick={() => removeRule(index)} aria-label="Delete rule"><Trash2 size={14} /></button>
+          <span className="highlight-move">
+            <button className="icon-button subtle" onClick={() => moveRule(index, index - 1)} disabled={index === 0} aria-label="Move up">↑</button>
+            <button className="icon-button subtle" onClick={() => moveRule(index, index + 1)} disabled={index === rules.length - 1} aria-label="Move down">↓</button>
+          </span>
+        </div>
+        <ConditionRows
+          key={`${rule.id}-cond`}
+          conditions={rule.conditions ?? []}
+          onChange={(nextConds) => updateRule(index, { conditions: nextConds })}
+          columns={columns}
+        />
       </div>;
     })}
     <div className="highlight-actions">
       <button className="back-button" onClick={addRule} disabled={rules.length >= 10}><Plus size={15} />Add rule</button>
-      <span className="highlight-hint">First matching rule wins. Drag ⋮⋮ to reorder priority. Max 10.</span>
+      <span className="highlight-hint">First matching rule wins. Drag ⋮⋮ to reorder priority. Max 10 rules, max 5 conditions each.</span>
     </div>
   </div>;
 }
@@ -287,13 +341,18 @@ function ReportsTab({ session, schools, sections, reports, refresh }: { session:
     if (!editing) return;
     setNotice('');
     setError('');
-    // Client-side highlight validation: block save if any rule is invalid
+    // Client-side highlight validation: block save if any rule or condition is invalid
     const rules = (editing.highlightRules ?? []) as ReportHighlightRule[];
     for (const r of rules) {
-      if (!r.column.trim()) { setError('Each highlight rule needs a column.'); setEditorTab('rules'); return; }
-      const needsValue = r.operator !== 'is_empty' && r.operator !== 'is_not_empty';
-      if (needsValue && !r.value.trim()) { setError(`Rule for "${r.column}" needs a value.`); setEditorTab('rules'); return; }
-      if (!needsValue && r.value.trim()) { setError(`Rule for "${r.column}" must have an empty value for "${r.operator}".`); setEditorTab('rules'); return; }
+      const conds = r.conditions ?? [];
+      if (conds.length === 0) { setError('Each highlight rule needs at least one condition.'); setEditorTab('rules'); return; }
+      if (conds.length > 5) { setError('Each highlight rule can have at most 5 conditions.'); setEditorTab('rules'); return; }
+      for (const c of conds) {
+        if (!c.column.trim()) { setError('Each highlight rule condition needs a column.'); setEditorTab('rules'); return; }
+        const needsValue = c.operator !== 'is_empty' && c.operator !== 'is_not_empty';
+        if (needsValue && !c.value.trim()) { setError(`Rule for "${c.column}" needs a value.`); setEditorTab('rules'); return; }
+        if (!needsValue && c.value.trim()) { setError(`Rule for "${c.column}" must have an empty value for "${c.operator}".`); setEditorTab('rules'); return; }
+      }
     }
     if (rules.length > 10) { setError('At most 10 highlight rules are allowed.'); setEditorTab('rules'); return; }
     // Normalize subreport fields (blank query => no subreport).
@@ -469,19 +528,7 @@ function ReportsTab({ session, schools, sections, reports, refresh }: { session:
               const rules = (editing.highlightRules ?? []) as ReportHighlightRule[];
               let bg: string | undefined;
               for (const r of rules) {
-                const raw = row[r.column];
-                const cell = raw === null || raw === undefined ? '' : String(raw).trim();
-                const needle = resolveHighlightNeedle(r.value);
-                let match = false;
-                switch (r.operator) {
-                  case 'eq': match = cell.toLowerCase() === needle.toLowerCase(); break;
-                  case 'neq': match = cell.toLowerCase() !== needle.toLowerCase(); break;
-                  case 'contains': match = cell.toLowerCase().includes(needle.toLowerCase()); break;
-                  case 'not_contains': match = !cell.toLowerCase().includes(needle.toLowerCase()); break;
-                  case 'is_empty': match = cell === ''; break;
-                  case 'is_not_empty': match = cell !== ''; break;
-                }
-                if (match) { bg = HIGHLIGHT_PALETTE[r.color]?.bg; break; }
+                if (ruleMatchesRow(r, row)) { bg = HIGHLIGHT_PALETTE[r.color]?.bg; break; }
               }
               return <Fragment key={index}>
                 <tr style={bg ? { background: bg } : undefined}>{preview.columns.map((column) => <td key={column}><span>{row[column] === null || row[column] === undefined ? '' : String(row[column])}</span></td>)}</tr>
@@ -492,7 +539,7 @@ function ReportsTab({ session, schools, sections, reports, refresh }: { session:
         </div>}
       </> : editorTab === 'rules' ? <>
         <div className="settings-field"><span>Row Highlighting (optional)</span>
-          <p className="highlight-desc">When a row matches a rule, the entire row is tinted. First matching rule wins. For the current year use <code>THISYEAR</code> (all caps) and next year use <code>NEXTYEAR</code> (all caps).</p>
+          <p className="highlight-desc">When a row matches a rule, the entire row is tinted. First matching rule wins. Within a rule, add multiple conditions and choose <strong>any (OR)</strong> or <strong>all (AND)</strong>. For the current year use <code>THISYEAR</code> (all caps) and next year use <code>NEXTYEAR</code> (all caps).</p>
           <RowHighlightingEditor
             rules={(editing.highlightRules ?? []) as ReportHighlightRule[]}
             onChange={(next) => setEditing({ ...editing, highlightRules: next })}
@@ -506,19 +553,7 @@ function ReportsTab({ session, schools, sections, reports, refresh }: { session:
                 const rules = (editing.highlightRules ?? []) as ReportHighlightRule[];
                 let bg: string | undefined;
                 for (const r of rules) {
-                  const raw = row[r.column];
-                  const cell = raw === null || raw === undefined ? '' : String(raw).trim();
-                  const needle = resolveHighlightNeedle(r.value);
-                  let match = false;
-                  switch (r.operator) {
-                    case 'eq': match = cell.toLowerCase() === needle.toLowerCase(); break;
-                    case 'neq': match = cell.toLowerCase() !== needle.toLowerCase(); break;
-                    case 'contains': match = cell.toLowerCase().includes(needle.toLowerCase()); break;
-                    case 'not_contains': match = !cell.toLowerCase().includes(needle.toLowerCase()); break;
-                    case 'is_empty': match = cell === ''; break;
-                    case 'is_not_empty': match = cell !== ''; break;
-                  }
-                  if (match) { bg = HIGHLIGHT_PALETTE[r.color]?.bg; break; }
+                  if (ruleMatchesRow(r, row)) { bg = HIGHLIGHT_PALETTE[r.color]?.bg; break; }
                 }
               return <Fragment key={index}>
                 <tr style={bg ? { background: bg } : undefined}>{preview.columns.map((column) => <td key={column}><span>{row[column] === null || row[column] === undefined ? '' : String(row[column])}</span></td>)}</tr>

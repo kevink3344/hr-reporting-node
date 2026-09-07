@@ -59,7 +59,7 @@ import type {
   School,
   ViewDefinition
 } from './types';
-import { HIGHLIGHT_PALETTE, resolveHighlightNeedle } from './types';
+import { describeHighlightRule, HIGHLIGHT_PALETTE, ruleMatchesRow as sharedRuleMatchesRow } from './types';
 
 function ReportOption({ report, onOpen }: { report: ReportDefinition; onOpen: (report: ReportDefinition) => void }) {
   const active = report.status === 'active';
@@ -239,18 +239,7 @@ function GenericReportView({
   }
 
   function ruleMatchesRow(rule: ReportHighlightRule, row: Record<string, unknown>): boolean {
-    const raw = row[rule.column];
-    const cell = raw === null || raw === undefined ? '' : String(raw).trim();
-    const needle = resolveHighlightNeedle(rule.value);
-    switch (rule.operator) {
-      case 'eq': return cell.toLowerCase() === needle.toLowerCase();
-      case 'neq': return cell.toLowerCase() !== needle.toLowerCase();
-      case 'contains': return cell.toLowerCase().includes(needle.toLowerCase());
-      case 'not_contains': return !cell.toLowerCase().includes(needle.toLowerCase());
-      case 'is_empty': return cell === '';
-      case 'is_not_empty': return cell !== '';
-      default: return false;
-    }
+    return sharedRuleMatchesRow(rule, row);
   }
 
   const activeHighlightRule = useMemo(
@@ -563,7 +552,7 @@ function GenericReportView({
             ? `${displayRows.length} rows`
             : `Showing ${displayRows.length} of ${result.rows.length} rows`}
           {activeHighlightRule && (
-            <span className="report-filter-highlight-label"> · filtered by <em>{activeHighlightRule.column} {activeHighlightRule.operator} "{activeHighlightRule.value}"</em></span>
+            <span className="report-filter-highlight-label"> · filtered by <em>{describeHighlightRule(activeHighlightRule)}</em></span>
           )}
           {displayRows.length === 0 && filterInput && (
             <button className="link-button" onClick={clearFilter}>Clear text filter</button>
@@ -589,9 +578,7 @@ function GenericReportView({
           {adminHighlightRules.map((rule) => {
             const p = HIGHLIGHT_PALETTE[rule.color];
             if (!p) return null;
-            const label = rule.operator === 'is_empty' || rule.operator === 'is_not_empty'
-              ? `${rule.column} ${rule.operator.replace('_', ' ')}`
-              : `${rule.column} ${rule.operator} "${rule.value}"`;
+            const label = describeHighlightRule(rule);
             const active = activeHighlightFilterId === rule.id;
             return (
               <button

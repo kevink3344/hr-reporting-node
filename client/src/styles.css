@@ -325,13 +325,23 @@ h1, h2, h3, p { margin-top: 0; } h1 { margin-bottom: 0; font-size: 17px; } h2 { 
 .highlight-empty { display: grid; gap: 10px; padding: 16px; border: 1px dashed #d9d0c1; border-radius: 8px; background: #fffdf8; text-align: center; }
 .highlight-empty p { margin: 0; color: #8c857a; font-size: 13px; }
 .highlight-rules { display: grid; gap: 8px; }
-.highlight-rule { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 8px 8px; border: 1px solid #e3e7e2; border-radius: 8px; background: #fff; }
+.highlight-rule { display: grid; gap: 6px; padding: 8px 8px; border: 1px solid #e3e7e2; border-radius: 8px; background: #fff; }
 .highlight-rule.dragging { opacity: .45; }
+.highlight-rule-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .highlight-drag { display: grid; place-items: center; color: #8c857a; cursor: grab; }
 .highlight-drag:active { cursor: grabbing; }
 .highlight-when { color: #8b6b3e; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.highlight-rule-meta { color: #6b6459; font-size: 11px; flex: 1 1 auto; min-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.highlight-spacer { flex: 1 1 auto; }
+.highlight-logic { display: inline-flex; align-items: center; gap: 5px; margin-left: auto; }
+.highlight-logic-label { color: #6b6459; font-size: 10px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; }
 .highlight-rule select, .highlight-rule input { height: 32px; padding: 0 8px; border: 1px solid #d2c7b7; border-radius: 6px; background: #fffdf8; color: #26231f; font-size: 12px; }
 .highlight-rule input { min-width: 90px; flex: 1 1 90px; }
+.highlight-conditions { display: grid; gap: 5px; padding-left: 20px; }
+.highlight-condition { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.highlight-cond-badge { color: #8b6b3e; font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; min-width: 40px; }
+.highlight-cond-badge + select, .highlight-condition select { height: 32px; padding: 0 8px; border: 1px solid #d2c7b7; border-radius: 6px; background: #fffdf8; color: #26231f; font-size: 12px; }
+.highlight-add-cond { margin-left: 20px; margin-top: 2px; }
 .highlight-color { display: inline-flex; align-items: center; gap: 6px; }
 .highlight-color-dot { width: 14px; height: 14px; border-radius: 50%; border: 1px solid #d9d0c1; flex: 0 0 auto; }
 .highlight-delete { color: #8e3f31; }
@@ -393,12 +403,14 @@ h1, h2, h3, p { margin-top: 0; } h1 { margin-bottom: 0; font-size: 17px; } h2 { 
 @media (max-width: 680px) { .positions-table-wrap { display: none; } .positions-cards { display: block; } .positions-header { flex-direction: column; align-items: start; } }
 [data-theme="dark"] .nav-count { background: #24332e; color: #7ecbb5; }
 [data-theme="dark"] .positions-card { border-color: #3a332a; background: #1c1813; }
-@media (max-width: 680px) { .highlight-rule { gap: 6px; } .highlight-rule select, .highlight-rule input { flex: 1 1 100%; } }
+@media (max-width: 680px) { .highlight-rule select, .highlight-rule input, .highlight-condition select { flex: 1 1 100%; } .highlight-rule-head, .highlight-condition { align-items: stretch; } }
 [data-theme="dark"] .highlight-desc { color: #a89f91; }
+[data-theme="dark"] .highlight-rule-meta { color: #9b9284; }
+[data-theme="dark"] .highlight-logic-label, [data-theme="dark"] .highlight-cond-badge { color: #9b9284; }
 [data-theme="dark"] .highlight-empty { border-color: #3a332a; background: #1c1813; }
 [data-theme="dark"] .highlight-empty p { color: #9b9284; }
 [data-theme="dark"] .highlight-rule { border-color: #3a332a; background: #1c1813; }
-[data-theme="dark"] .highlight-rule select, [data-theme="dark"] .highlight-rule input { border-color: #3a332a; background: #241f19; color: #e8e2d7; }
+[data-theme="dark"] .highlight-rule select, [data-theme="dark"] .highlight-rule input, [data-theme="dark"] .highlight-condition select { border-color: #3a332a; background: #241f19; color: #e8e2d7; }
 [data-theme="dark"] .highlight-legend-chip { border-color: #3a332a; color: #e8e2d7; }
 
 /* Dark theme — report data table + muted row highlights */

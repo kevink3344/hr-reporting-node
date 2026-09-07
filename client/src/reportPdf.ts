@@ -7,32 +7,16 @@ const HIGHLIGHT_PDF_RGB: Record<string, [number, number, number]> = {
   pastel_orange: [255, 228, 196],
 };
 
-function resolveNeedle(value: string): string {
-  const t = (value ?? '').trim();
-  if (t === 'THISYEAR') return String(new Date().getFullYear());
-  if (t === 'NEXTYEAR') return String(new Date().getFullYear() + 1);
-  return t;
-}
+import type { ReportHighlightRule } from './types';
+import { ruleMatchesRow } from './types';
 
 function highlightPdfColorForRow(
   row: Record<string, unknown>,
-  rules?: { column: string; operator: string; value: string; color: string }[]
+  rules?: ReportHighlightRule[]
 ): [number, number, number] | null {
   if (!rules || rules.length === 0) return null;
   for (const rule of rules) {
-    const raw = row[rule.column];
-    const cell = raw === null || raw === undefined ? '' : String(raw).trim();
-    const needle = resolveNeedle(rule.value);
-    let match = false;
-    switch (rule.operator) {
-      case 'eq': match = cell.toLowerCase() === needle.toLowerCase(); break;
-      case 'neq': match = cell.toLowerCase() !== needle.toLowerCase(); break;
-      case 'contains': match = cell.toLowerCase().includes(needle.toLowerCase()); break;
-      case 'not_contains': match = !cell.toLowerCase().includes(needle.toLowerCase()); break;
-      case 'is_empty': match = cell === ''; break;
-      case 'is_not_empty': match = cell !== ''; break;
-    }
-    if (match) return HIGHLIGHT_PDF_RGB[rule.color] ?? null;
+    if (ruleMatchesRow(rule, row)) return HIGHLIGHT_PDF_RGB[rule.color] ?? null;
   }
   return null;
 }
@@ -47,7 +31,7 @@ export async function exportGenericReportToPdf(run: {
   columns: string[];
   rows: (Record<string, unknown> & { __subreport?: { keyColumn: string; columns: string[]; rows: Record<string, unknown>[] } })[];
   truncated?: boolean;
-  highlightRules?: { column: string; operator: string; value: string; color: string }[];
+  highlightRules?: ReportHighlightRule[];
   subreport?: { keyColumn: string } | null;
 }): Promise<void> {
   const { jsPDF } = await import('jspdf');

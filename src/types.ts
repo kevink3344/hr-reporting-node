@@ -169,12 +169,19 @@ export type ReportStatus = 'active' | 'inactive';
 
 export type HighlightOperator = 'eq' | 'neq' | 'contains' | 'not_contains' | 'is_empty' | 'is_not_empty';
 export type HighlightColorId = 'pastel_red' | 'pastel_yellow' | 'pastel_green' | 'pastel_blue' | 'pastel_pink' | 'pastel_orange';
+export type HighlightLogic = 'and' | 'or';
 
-export type ReportHighlightRule = {
-  id: string;
+export type ReportHighlightCondition = {
   column: string;
   operator: HighlightOperator;
   value: string;
+};
+
+export type ReportHighlightRule = {
+  id: string;
+  /** How `conditions` combine: 'and' = all must match, 'or' = any must match. Default 'or'. */
+  logic: HighlightLogic;
+  conditions: ReportHighlightCondition[];
   color: HighlightColorId;
 };
 

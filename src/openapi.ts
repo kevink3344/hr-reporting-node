@@ -684,14 +684,22 @@ export const openApiDocument = {
           isActive: { type: 'boolean' }
         }
       },
-      ReportHighlightRule: {
+      ReportHighlightCondition: {
         type: 'object',
-        required: ['id', 'column', 'operator', 'value', 'color'],
+        required: ['column', 'operator', 'value'],
         properties: {
-          id: { type: 'string' },
           column: { type: 'string', maxLength: 64 },
           operator: { type: 'string', enum: ['eq', 'neq', 'contains', 'not_contains', 'is_empty', 'is_not_empty'] },
-          value: { type: 'string', maxLength: 200 },
+          value: { type: 'string', maxLength: 200 }
+        }
+      },
+      ReportHighlightRule: {
+        type: 'object',
+        required: ['id', 'logic', 'conditions', 'color'],
+        properties: {
+          id: { type: 'string' },
+          logic: { type: 'string', enum: ['and', 'or'], description: 'How conditions combine: all (and) or any (or). Default or.' },
+          conditions: { type: 'array', items: { $ref: '#/components/schemas/ReportHighlightCondition' }, minItems: 1, maxItems: 5 },
           color: { type: 'string', enum: ['pastel_red', 'pastel_yellow', 'pastel_green', 'pastel_blue', 'pastel_pink', 'pastel_orange'] }
         }
       },

@@ -141,7 +141,21 @@ export type ReportStatus = 'active' | 'inactive';
 
 export type HighlightOperator = 'eq' | 'neq' | 'contains' | 'not_contains' | 'is_empty' | 'is_not_empty';
 export type HighlightColorId = 'pastel_red' | 'pastel_yellow' | 'pastel_green' | 'pastel_blue' | 'pastel_pink' | 'pastel_orange';
-export type ReportHighlightRule = { id: string; column: string; operator: HighlightOperator; value: string; color: HighlightColorId };
+export type HighlightLogic = 'and' | 'or';
+
+export type ReportHighlightCondition = {
+  column: string;
+  operator: HighlightOperator;
+  value: string;
+};
+
+export type ReportHighlightRule = {
+  id: string;
+  /** How `conditions` combine: 'and' = all must match, 'or' = any must match. Default 'or'. */
+  logic: HighlightLogic;
+  conditions: ReportHighlightCondition[];
+  color: HighlightColorId;
+};
 
 export const HIGHLIGHT_PALETTE: Record<HighlightColorId, { label: string; bg: string; border: string; excelRgb: string }> = {
   pastel_red: { label: 'Pastel red', bg: '#ffd6d6', border: '#e8a0a0', excelRgb: 'FFFFD6D6' },
@@ -157,6 +171,45 @@ export function resolveHighlightNeedle(value: string): string {
   if (trimmed === 'THISYEAR') return String(new Date().getFullYear());
   if (trimmed === 'NEXTYEAR') return String(new Date().getFullYear() + 1);
   return trimmed;
+}
+
+/** Human-readable description of a single condition, e.g. `contract_desc equals "Terminating"`. */
+export function describeHighlightCondition(cond: ReportHighlightCondition): string {
+  const needsValue = cond.operator !== 'is_empty' && cond.operator !== 'is_not_empty';
+  if (!needsValue) return `${cond.column} ${cond.operator.replace('_', ' ')}`;
+  return `${cond.column} ${cond.operator} "${cond.value}"`;
+}
+
+/** Human-readable description of a whole rule, e.g. `contract_desc equals "Terminating" OR contract_desc equals "Retiree"`. */
+export function describeHighlightRule(rule: ReportHighlightRule): string {
+  const parts = (rule.conditions ?? []).map(describeHighlightCondition);
+  if (parts.length === 0) return 'empty rule';
+  return parts.join(` ${(rule.logic ?? 'or').toUpperCase()} `);
+}
+
+/** Evaluate a single condition against a row. */
+export function conditionMatchesRow(cond: ReportHighlightCondition, row: Record<string, unknown> | undefined | null): boolean {
+  const cellValue = row ? row[cond.column] : undefined;
+  const raw = cellValue === null || cellValue === undefined ? '' : String(cellValue);
+  const cell = raw.trim();
+  const needle = resolveHighlightNeedle(cond.value);
+  switch (cond.operator) {
+    case 'eq': return cell.toLowerCase() === needle.toLowerCase();
+    case 'neq': return cell.toLowerCase() !== needle.toLowerCase();
+    case 'contains': return cell.toLowerCase().includes(needle.toLowerCase());
+    case 'not_contains': return !cell.toLowerCase().includes(needle.toLowerCase());
+    case 'is_empty': return cell === '';
+    case 'is_not_empty': return cell !== '';
+    default: return false;
+  }
+}
+
+/** Evaluate a compound rule (AND/OR) against a row. */
+export function ruleMatchesRow(rule: ReportHighlightRule, row: Record<string, unknown> | undefined | null): boolean {
+  const conditions = rule.conditions ?? [];
+  if (conditions.length === 0) return false;
+  const results = conditions.map((c) => conditionMatchesRow(c, row));
+  return (rule.logic ?? 'or') === 'and' ? results.every(Boolean) : results.some(Boolean);
 }
 
 export type ReportDefinition = {
