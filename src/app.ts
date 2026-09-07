@@ -1,6 +1,14 @@
 import express from 'express';
 import swaggerUi from 'swagger-ui-express';
 import { z } from 'zod';
+import { existsSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// Repo root = one level up from this module (dist/ or src/). Resolve the built
+// React client relative to the module so it works regardless of process.cwd().
+const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
+const CLIENT_DIST = resolve(MODULE_DIR, '..', 'client', 'dist');
 import { fixtureRepositories } from './repositories/fixture-repository.js';
 import { mysqlRepositories } from './repositories/mysql-repository.js';
 import { tursoRepositories } from './repositories/turso-repository.js';
@@ -179,7 +187,10 @@ const systemMessageSchema = z.object({
 
 const systemMessagePatchSchema = systemMessageSchema.partial();
 
-export function createApp(repositories: Repositories = fixtureRepositories) {
+export function createApp(
+  repositories: Repositories = fixtureRepositories,
+  options?: { serveClient?: boolean }
+) {
   const application = express();
   application.use(express.json());
 
@@ -1046,6 +1057,10 @@ export function createApp(repositories: Repositories = fixtureRepositories) {
   });
   application.use('/api/docs', swaggerUi.serve, swaggerUi.setup(openApiDocument));
 
+  // Serve the built React client (single-host deployment). Only mounts when a
+  // production build exists; in dev the Vite dev server runs separately on 5173.
+  if (options?.serveClient) mountClientStatic(application);
+
   application.use((error: unknown, _request: express.Request, response: express.Response, _next: express.NextFunction) => {
     if (error instanceof z.ZodError) {
       response.status(400).json({ error: 'VALIDATION_ERROR', details: error.issues });
@@ -1065,5 +1080,18 @@ export const app = createApp();
 export function createRuntimeApp(): ReturnType<typeof createApp> {
   const dataSource = getDataSource();
   const repositories = dataSource === 'mysql' ? mysqlRepositories : dataSource === 'turso' ? tursoRepositories : fixtureRepositories;
-  return createApp(repositories);
+  return createApp(repositories, { serveClient: true });
+}
+
+// Mount the built SPA and fall back to index.html for client-side routes
+// (e.g. /reports, /settings) so deep links work on a single host. Skips /api.
+function mountClientStatic(application: express.Express): void {
+  const indexHtml = resolve(CLIENT_DIST, 'index.html');
+  if (!existsSync(indexHtml)) return;
+  application.use(express.static(CLIENT_DIST));
+  application.use((request, response, next) => {
+    if (request.method !== 'GET' && request.method !== 'HEAD') return next();
+    if (request.path.startsWith('/api')) return next();
+    response.sendFile(indexHtml);
+  });
 }
