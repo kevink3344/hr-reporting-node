@@ -115,3 +115,68 @@ export async function exportGenericReport(run: {
   const slug = run.report.title.toLowerCase().replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '-') || 'report';
   writeFile(workbook, `${slug}-${sanitizeFilename(run.organization)}.xlsx`, { compression: true });
 }
+
+function csvEscape(value: unknown): string {
+  const text = value === null || value === undefined ? '' : String(value);
+  // Quote if the cell contains a comma, quote, newline, or leading/trailing space.
+  if (/[",\n\r]|^\s|\s$/u.test(text)) {
+    return `"${text.replace(/"/gu, '""')}"`;
+  }
+  return text;
+}
+
+function blobDownload(content: string, mime: string, filename: string): void {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Export a generic report run to a UTF-8 CSV file. Includes the optional
+ * subreport block as a second CSV section beneath the main data (CSV has no
+ * multi-sheet support, so we append the subreport rows after a blank spacer).
+ */
+export async function exportGenericReportToCsv(run: {
+  report: { title: string };
+  organization: string;
+  columns: string[];
+  rows: (Record<string, unknown> & { __subreport?: { keyColumn: string; columns: string[]; rows: Record<string, unknown>[] } })[];
+  subreport?: { keyColumn: string } | null;
+}): Promise<void> {
+  const header = run.columns;
+  const lines: string[] = [];
+  lines.push(header.map(csvEscape).join(','));
+
+  for (const row of run.rows) {
+    lines.push(header.map((column) => csvEscape(row[column])).join(','));
+  }
+
+  // Subreport block: repeat the parent key per child row, after a blank spacer row.
+  if (run.subreport) {
+    const keyColumn = run.subreport.keyColumn;
+    const firstSub = run.rows.find((row) => row.__subreport && row.__subreport.rows.length > 0)?.__subreport;
+    const subColumns = firstSub?.columns ?? [];
+    if (subColumns.length > 0) {
+      const subHeader = [keyColumn, ...subColumns];
+      lines.push('');
+      lines.push(subHeader.map(csvEscape).join(','));
+      for (const row of run.rows) {
+        const sub = row.__subreport;
+        if (!sub || sub.rows.length === 0) continue;
+        const parentKey = String(row[keyColumn] ?? '');
+        for (const child of sub.rows) {
+          lines.push([parentKey, ...subColumns.map((col) => csvEscape(child[col]))].join(','));
+        }
+      }
+    }
+  }
+
+  const slug = run.report.title.toLowerCase().replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '-') || 'report';
+  blobDownload('\uFEFF' + lines.join('\r\n'), 'text/csv;charset=utf-8;', `${slug}-${sanitizeFilename(run.organization)}.csv`);
+}

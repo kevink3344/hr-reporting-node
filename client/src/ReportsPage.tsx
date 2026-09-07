@@ -9,7 +9,8 @@ import {
   ChevronDown,
   ChevronRight,
   Clock,
-  Download,
+  FileDown,
+  FileSpreadsheet,
   FileText,
   MessageSquare,
   Search,
@@ -29,7 +30,7 @@ import {
   runReport,
   updateReportView
 } from './api';
-import { exportGenericReport } from './reportExport';
+import { exportGenericReport, exportGenericReportToCsv } from './reportExport';
 import { exportGenericReportToPdf } from './reportPdf';
 import { SchoolCombobox } from './SchoolCombobox';
 import { loadLastReport, loadLastSchool, saveLastReport, saveLastSchool } from './lastRun';
@@ -450,8 +451,9 @@ function GenericReportView({
       <button className="back-button" onClick={onBack}><ArrowLeft size={17} />All reports</button>
       <div className="report-view-actions">
         <span className="report-view-meta">{displayRows.length} of {result.rows.length} rows{result.truncated ? ' (truncated)' : ''}</span>
-        <button className="export-button" onClick={() => void exportGenericReport(exportRun)} aria-label="Export to Excel"><Download size={17} /><span><span className="export-label-long">Export to </span>Excel</span></button>
-        <button className="export-button export-button--secondary" onClick={() => void exportGenericReportToPdf(exportRun)} aria-label="Export to PDF"><Download size={17} /><span><span className="export-label-long">Export to </span>PDF</span></button>
+        <button className="export-button export-button--icon" onClick={() => void exportGenericReport(exportRun)} aria-label="Export to Excel" title="Export to Excel"><FileSpreadsheet size={17} /></button>
+        <button className="export-button export-button--secondary export-button--icon" onClick={() => void exportGenericReportToCsv(exportRun)} aria-label="Export to CSV" title="Export to CSV"><FileDown size={17} /></button>
+        <button className="export-button export-button--secondary export-button--icon" onClick={() => void exportGenericReportToPdf(exportRun)} aria-label="Export to PDF" title="Export to PDF"><FileText size={17} /></button>
       </div>
       <div className="report-view-title"><p className="eyebrow">Report{result.report.sectionTitle ? ` — ${result.report.sectionTitle}` : ''}</p><h2>{result.report.title} <span className="report-scope">{result.organization}</span></h2></div>
     </div>
