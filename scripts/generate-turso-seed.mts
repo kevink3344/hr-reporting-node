@@ -183,7 +183,12 @@ const vacantPositions = [
   { id: 2002, number: 3180302, name: 'Assistant Principal', org: 'Test Maple Middle', months: 11 },
   { id: 2003, number: 3180303, name: 'Counselor', org: 'Test River High', months: 11 },
   { id: 2004, number: 3180304, name: 'Teacher', org: 'Test Cedar Elementary', months: 10 },
-  { id: 2005, number: 3180305, name: 'HR Specialist', org: 'Test Central Office', months: 12 }
+  { id: 2005, number: 3180305, name: 'HR Specialist', org: 'Test Central Office', months: 12 },
+  // Extra Test Oak Elementary vacancies so the Position Details "no incumbent"
+  // card can be tested against several vacant positions in one school.
+  { id: 2006, number: 3180306, name: 'Teacher', org: 'Test Oak Elementary', months: 10 },
+  { id: 2007, number: 3180307, name: 'Counselor', org: 'Test Oak Elementary', months: 11 },
+  { id: 2008, number: 3180308, name: 'Assistant Principal', org: 'Test Oak Elementary', months: 11 }
 ];
 for (let i = 0; i < vacantPositions.length; i++) {
   const p = vacantPositions[i];
