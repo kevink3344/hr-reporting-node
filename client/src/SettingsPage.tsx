@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
-import { AlertCircle, Archive, CheckCircle2, GripVertical, Pencil, Play, Plus, Trash2, X } from 'lucide-react';
+import { AlertCircle, Archive, CheckCircle2, FileText, GripVertical, ListChecks, Pencil, Play, Plus, Settings2, Trash2, X } from 'lucide-react';
 import { createReport, createReportSection, getReports, getReportSections, runReport, updateReport, updateReportSection, validateReportSql } from './api';
 import type { GenericReportRowWithSubreport, GenericSubreportRun, HighlightColorId, HighlightOperator, LoginSession, ReportDefinition, ReportHighlightRule, ReportSection, School } from './types';
 import { HIGHLIGHT_PALETTE, resolveHighlightNeedle } from './types';
@@ -417,10 +417,10 @@ function ReportsTab({ session, schools, sections, reports, refresh }: { session:
         <h3>{editing.id ? 'Edit report' : 'New report'}</h3>
         <button className="icon-button subtle" aria-label="Close report editor" onClick={() => setEditing(null)}><X size={18} /></button>
       </div>
-      <div className="settings-tabs" role="tablist" aria-label="Report editor tabs">
-        <button role="tab" aria-selected={editorTab === 'general'} className={editorTab === 'general' ? 'settings-tab active' : 'settings-tab'} onClick={() => setEditorTab('general')}>General</button>
-        <button role="tab" aria-selected={editorTab === 'rules'} className={editorTab === 'rules' ? 'settings-tab active' : 'settings-tab'} onClick={() => setEditorTab('rules')}>Rules</button>
-        <button role="tab" aria-selected={editorTab === 'options'} className={editorTab === 'options' ? 'settings-tab active' : 'settings-tab'} onClick={() => setEditorTab('options')}>Options</button>
+      <div className="position-detail-tabs" role="tablist" aria-label="Report editor tabs">
+        <button role="tab" aria-selected={editorTab === 'general'} className={editorTab === 'general' ? 'position-detail-tab active' : 'position-detail-tab'} onClick={() => setEditorTab('general')}><FileText size={15} />General</button>
+        <button role="tab" aria-selected={editorTab === 'rules'} className={editorTab === 'rules' ? 'position-detail-tab active' : 'position-detail-tab'} onClick={() => setEditorTab('rules')}><ListChecks size={15} />Rules</button>
+        <button role="tab" aria-selected={editorTab === 'options'} className={editorTab === 'options' ? 'position-detail-tab active' : 'position-detail-tab'} onClick={() => setEditorTab('options')}><Settings2 size={15} />Options</button>
       </div>
       {editorTab === 'general' ? <>
         <label className="settings-field"><span>Title</span><input value={editing.title ?? ''} onChange={(event) => setEditing({ ...editing, title: event.target.value })} /></label>
