@@ -351,16 +351,12 @@ h1, h2, h3, p { margin-top: 0; } h1 { margin-bottom: 0; font-size: 17px; } h2 { 
 .report-cell-link { display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: transparent; color: #2e5e56; font: inherit; font-weight: 500; cursor: pointer; text-align: left; text-decoration: underline; text-underline-offset: 2px; }
 .report-cell-link:hover { color: #1e403a; }
 
-.report-pin { color: #8b6b3e; opacity: .85; flex: 0 0 auto; }
-.report-pin-toggle { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: 0; background: transparent; color: #b3aa9c; cursor: pointer; border-radius: 6px; flex: 0 0 auto; }
-.report-pin-toggle:hover { color: #514a41; background: rgba(38, 35, 31, .06); }
-.report-pin-toggle--active { color: #8b6b3e; }
-.report-pin-col-head, .report-pin-cell { width: 28px; padding-left: 8px; padding-right: 8px; }
-.report-pin-cell { text-align: left; }
-@media (max-width: 680px) {
-  .report-pin-col-head { display: none; }
-  .report-pin-cell { display: none; }
-}
+.position-pin-toggle { color: #b3aa9c; }
+.position-pin-toggle:hover { color: #514a41; background: rgba(38, 35, 31, .06); }
+.position-pin-toggle--active { color: #8b6b3e; }
+[data-theme="dark"] .position-pin-toggle { color: #7a7264; }
+[data-theme="dark"] .position-pin-toggle:hover { color: #c9a066; background: rgba(232, 181, 91, .08); }
+[data-theme="dark"] .position-pin-toggle--active { color: #c9a066; }
 /* Nested subreport table (main report + child rows) */
 .report-subreport-row td { border-bottom: 1px solid #e4ddd1; padding: 0; }
 .report-subreport-table { width: auto; min-width: max-content; max-width: 100%; border-collapse: collapse; }
@@ -372,33 +368,24 @@ h1, h2, h3, p { margin-top: 0; } h1 { margin-bottom: 0; font-size: 17px; } h2 { 
   .report-subreport-table td::before { content: attr(data-label); flex: 0 0 auto; font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: #8b6b3e; }
   .report-subreport-table td { color: #665f56; font-size: 13px; word-break: break-word; }
 }
-.record-pin { display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; color: #8b6b3e; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; vertical-align: middle; }
-.record-pin-meta { display: block; margin-top: 4px; color: #8c857a; font-size: 11px; }
-.nav-count { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 6px; margin-left: auto; border-radius: 999px; background: #edf3ee; color: #2e5e56; font-size: 11px; font-weight: 700; }
-.favorites-page { max-width: 1180px; margin: 0 auto; padding: clamp(38px, 6vw, 72px) clamp(20px, 5vw, 72px) 80px; }
-.favorites-header { display: flex; align-items: end; justify-content: space-between; gap: 28px; margin-bottom: 18px; }
-.favorites-copy { max-width: 620px; margin: 0; color: #756f66; line-height: 1.5; font-size: 13px; }
-.favorites-toolbar { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 18px; }
-.favorites-search { flex: 1 1 260px; }
-.favorites-table-wrap { overflow-x: auto; }
-.favorites-table { width: 100%; border-collapse: collapse; }
-.favorites-pin-inline { color: #8b6b3e; flex: 0 0 auto; }
-.favorites-person-link { display: inline-flex; align-items: center; gap: 6px; }
-.favorites-cards { display: none; }
-.favorites-card { border: 1px solid #d9d0c1; border-radius: 10px; background: #fffdf8; padding: 14px 16px; margin-bottom: 10px; }
-.favorites-card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.favorites-card-meta { display: flex; gap: 10px; color: #8c857a; font-size: 12px; margin-top: 6px; }
-.favorites-card-report { margin-top: 6px; }
-.favorites-pagination { display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 18px; }
-@media (max-width: 680px) { .favorites-table-wrap { display: none; } .favorites-cards { display: block; } .favorites-header { flex-direction: column; align-items: start; } }
-[data-theme="dark"] .report-pin { color: #c9a066; }
-[data-theme="dark"] .report-pin-toggle { color: #7a7264; }
-[data-theme="dark"] .report-pin-toggle:hover { color: #c9a066; background: rgba(232, 181, 91, .08); }
-[data-theme="dark"] .report-pin-toggle--active { color: #c9a066; }
-[data-theme="dark"] .record-pin { color: #c9a066; }
-[data-theme="dark"] .record-pin-meta { color: #9b9284; }
+.positions-page { max-width: 1180px; margin: 0 auto; padding: clamp(38px, 6vw, 72px) clamp(20px, 5vw, 72px) 80px; }
+.positions-header { display: flex; align-items: end; justify-content: space-between; gap: 28px; margin-bottom: 18px; }
+.positions-copy { max-width: 620px; margin: 0; color: #756f66; line-height: 1.5; font-size: 13px; }
+.positions-toolbar { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 18px; }
+.positions-search { flex: 1 1 260px; }
+.positions-table-wrap { overflow-x: auto; }
+.positions-table { width: 100%; border-collapse: collapse; }
+.positions-pin-inline { color: #8b6b3e; flex: 0 0 auto; }
+.positions-position-link { display: inline-flex; align-items: center; gap: 6px; }
+.positions-cards { display: none; }
+.positions-card { border: 1px solid #d9d0c1; border-radius: 10px; background: #fffdf8; padding: 14px 16px; margin-bottom: 10px; }
+.positions-card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.positions-card-title { font-weight: 600; color: #2c2a26; margin-top: 4px; }
+.positions-card-meta { display: flex; flex-wrap: wrap; gap: 10px; color: #8c857a; font-size: 12px; margin-top: 6px; }
+.positions-pagination { display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 18px; }
+@media (max-width: 680px) { .positions-table-wrap { display: none; } .positions-cards { display: block; } .positions-header { flex-direction: column; align-items: start; } }
 [data-theme="dark"] .nav-count { background: #24332e; color: #7ecbb5; }
-[data-theme="dark"] .favorites-card { border-color: #3a332a; background: #1c1813; }
+[data-theme="dark"] .positions-card { border-color: #3a332a; background: #1c1813; }
 @media (max-width: 680px) { .highlight-rule { gap: 6px; } .highlight-rule select, .highlight-rule input { flex: 1 1 100%; } }
 [data-theme="dark"] .highlight-desc { color: #a89f91; }
 [data-theme="dark"] .highlight-empty { border-color: #3a332a; background: #1c1813; }

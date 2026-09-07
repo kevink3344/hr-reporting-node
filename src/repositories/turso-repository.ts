@@ -4,7 +4,7 @@ import type {
   GenericReportRun,
   OpenPositionRow,
   Person,
-  PersonFavorite,
+  PositionPin,
   PersonRecord,
   PositionDetails,
   ReportDefinition,
@@ -16,7 +16,7 @@ import type {
   ViewDefinition
 } from '../types.js';
 import type {
-  PersonFavoriteInput,
+  PositionPinInput,
   Repositories,
   ReportDefinitionInput,
   ReportDefinitionUpdate,
@@ -933,60 +933,60 @@ export const tursoRepositories: Repositories = {
       return true;
     }
   },
-  personFavorites: {
+  positionPins: {
     async list(userId, opts = {}) {
       const conditions: string[] = ['user_id = ?'];
       const params: Value[] = [userId];
-      if (opts.reportId) { conditions.push('report_id = ?'); params.push(opts.reportId); }
       if (opts.organization) { conditions.push('organization = ?'); params.push(opts.organization); }
       if (opts.search) {
-        conditions.push('(LOWER(person_name) LIKE ? OR LOWER(employee_number) LIKE ? OR LOWER(report_title) LIKE ?)');
+        conditions.push('(LOWER(pos_name) LIKE ? OR LOWER(pos_number) LIKE ? OR LOWER(COALESCE(incumbent_name, \'\')) LIKE ? OR LOWER(COALESCE(employee_number, \'\')) LIKE ?)');
         const like = `%${opts.search.toLowerCase()}%`;
-        params.push(like, like, like);
+        params.push(like, like, like, like);
       }
       const where = conditions.join(' AND ');
-      const countRows = await query<{ n: number }>(`SELECT COUNT(*) AS n FROM person_favorites WHERE ${where}`, params);
+      const countRows = await query<{ n: number }>(`SELECT COUNT(*) AS n FROM position_pins WHERE ${where}`, params);
       const total = countRows[0]?.n ?? 0;
       const page = opts.page ?? 1;
       const pageSize = opts.pageSize ?? 50;
       const offset = (page - 1) * pageSize;
-      const rows = await query<PersonFavoriteRow>(`SELECT * FROM person_favorites WHERE ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`, [...params, pageSize, offset]);
-      return { data: rows.map(toPersonFavorite), total };
+      const rows = await query<PositionPinRow>(`SELECT * FROM position_pins WHERE ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`, [...params, pageSize, offset]);
+      return { data: rows.map(toPositionPin), total };
     },
-    async create(userId, input: PersonFavoriteInput) {
-      const personId = input.personId.trim();
-      if (!personId) throw codedError('PERSON_ID_REQUIRED');
-      const existing = await query<{ id: string }>('SELECT id FROM person_favorites WHERE user_id = ? AND person_id = ? LIMIT 1', [userId, personId]);
-      if (existing.length > 0) throw codedError('FAVORITE_EXISTS');
+    async create(userId, input: PositionPinInput) {
+      const posNumber = input.posNumber.trim();
+      if (!posNumber) throw codedError('PIN_REQUIRED');
+      const existing = await query<{ id: string }>('SELECT id FROM position_pins WHERE user_id = ? AND pos_number = ? AND organization = ? LIMIT 1', [userId, posNumber, input.organization.trim()]);
+      if (existing.length > 0) throw codedError('PIN_EXISTS');
       const id = newId();
       const now = nowIso();
       await query(
-        'INSERT INTO person_favorites (id, user_id, person_id, employee_number, person_name, report_id, report_title, organization, row_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        [id, userId, personId, input.employeeNumber.trim(), input.personName.trim(), dbValue(input.reportId ?? null), input.reportTitle.trim(), input.organization.trim(), dbValue(input.rowKey ?? null), now]
+        'INSERT INTO position_pins (id, user_id, pos_number, pos_name, organization, incumbent_name, employee_number, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        [id, userId, posNumber, input.posName.trim(), input.organization.trim(), dbValue(input.incumbentName?.trim() || null), dbValue(input.employeeNumber?.trim() || null), now]
       );
-      const created = await query<PersonFavoriteRow>('SELECT * FROM person_favorites WHERE id = ? LIMIT 1', [id]);
-      return toPersonFavorite(created[0]);
+      const created = await query<PositionPinRow>('SELECT * FROM position_pins WHERE id = ? LIMIT 1', [id]);
+      return toPositionPin(created[0]);
     },
-    async delete(userId, favoriteId) {
-      const rows = await query<PersonFavoriteRow>('SELECT * FROM person_favorites WHERE id = ? AND user_id = ? LIMIT 1', [favoriteId, userId]);
+    async delete(userId, pinId) {
+      const rows = await query<PositionPinRow>('SELECT * FROM position_pins WHERE id = ? AND user_id = ? LIMIT 1', [pinId, userId]);
       if (!rows[0]) return false;
-      await query('DELETE FROM person_favorites WHERE id = ?', [favoriteId]);
+      await query('DELETE FROM position_pins WHERE id = ?', [pinId]);
       return true;
     },
-    async deleteByKey(userId, personId) {
-      const rows = await query<PersonFavoriteRow>('SELECT * FROM person_favorites WHERE user_id = ? AND person_id = ? LIMIT 1', [userId, personId]);
+    async deleteByKey(userId, posNumber, organization) {
+      const rows = await query<PositionPinRow>('SELECT * FROM position_pins WHERE user_id = ? AND pos_number = ? AND organization = ? LIMIT 1', [userId, posNumber, organization]);
       if (!rows[0]) return false;
-      await query('DELETE FROM person_favorites WHERE user_id = ? AND person_id = ?', [userId, personId]);
+      await query('DELETE FROM position_pins WHERE user_id = ? AND pos_number = ? AND organization = ?', [userId, posNumber, organization]);
       return true;
     },
-    async check(userId, personIds) {
-      if (personIds.length === 0) return [];
-      const placeholders = personIds.map(() => '?').join(',');
-      const rows = await query<PersonFavoriteRow>(`SELECT * FROM person_favorites WHERE user_id = ? AND person_id IN (${placeholders})`, [userId, ...personIds] as unknown as Value[]);
-      const byPersonId = new Map(rows.map((row) => [String(row.person_id), row]));
-      return personIds.map((personId) => {
-        const row = byPersonId.get(personId);
-        return { personId, favorited: !!row, favoriteId: row ? String(row.id) : null };
+    async check(userId, keys) {
+      if (keys.length === 0) return [];
+      const conditions = keys.map(() => '(pos_number = ? AND organization = ?)').join(' OR ');
+      const keyParams: Value[] = [];
+      for (const { posNumber, organization } of keys) { keyParams.push(posNumber, organization); }
+      const rows = await query<PositionPinRow>(`SELECT * FROM position_pins WHERE user_id = ? AND (${conditions})`, [userId, ...keyParams] as unknown as Value[]);
+      return keys.map((k) => {
+        const row = rows.find((r) => String(r.pos_number) === k.posNumber && String(r.organization) === k.organization);
+        return { posNumber: k.posNumber, organization: k.organization, pinned: !!row, pinId: row ? String(row.id) : null };
       });
     }
   }
@@ -1101,30 +1101,26 @@ type ReportViewCommentRow = {
   updated_at: string | null;
 };
 
-type PersonFavoriteRow = {
+type PositionPinRow = {
   id: string;
   user_id: string;
-  person_id: string;
-  employee_number: string | null;
-  person_name: string | null;
-  report_id: string | null;
-  report_title: string | null;
+  pos_number: string | null;
+  pos_name: string | null;
   organization: string | null;
-  row_key: string | null;
+  incumbent_name: string | null;
+  employee_number: string | null;
   created_at: string | null;
 };
 
-function toPersonFavorite(row: PersonFavoriteRow): PersonFavorite {
+function toPositionPin(row: PositionPinRow): PositionPin {
   return {
     id: String(row.id),
     userId: String(row.user_id),
-    personId: String(row.person_id),
-    employeeNumber: String(row.employee_number ?? ''),
-    personName: String(row.person_name ?? ''),
-    reportId: row.report_id ? String(row.report_id) : null,
-    reportTitle: String(row.report_title ?? ''),
+    posNumber: String(row.pos_number ?? ''),
+    posName: String(row.pos_name ?? ''),
     organization: String(row.organization ?? ''),
-    rowKey: row.row_key ?? null,
+    incumbentName: row.incumbent_name ? String(row.incumbent_name) : null,
+    employeeNumber: row.employee_number ? String(row.employee_number) : null,
     createdAt: String(row.created_at ?? '')
   };
 }

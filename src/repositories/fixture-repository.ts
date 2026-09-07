@@ -4,7 +4,7 @@ import type {
   GenericReportRun,
   OpenPositionRow,
   Person,
-  PersonFavorite,
+  PositionPin,
   PersonRecord,
   PositionDetails,
   ReportDefinition,
@@ -16,7 +16,7 @@ import type {
   ViewDefinition
 } from '../types.js';
 import type {
-  PersonFavoriteInput,
+  PositionPinInput,
   Repositories,
   ReportDefinitionInput,
   ReportDefinitionUpdate,
@@ -472,7 +472,7 @@ export const fixtureRepositories: Repositories = {
   reportViews: buildFixtureReportViews(),
   reportViewInvites: buildFixtureReportViewInvites(),
   reportViewComments: buildFixtureReportViewComments(),
-  personFavorites: buildFixturePersonFavorites()
+  positionPins: buildFixturePositionPins()
 };
 
 function buildFixtureReportViews(): Repositories['reportViews'] {
@@ -676,63 +676,60 @@ function buildFixtureReportViewComments(): Repositories['reportViewComments'] {
   };
 }
 
-const fixtureFavorites: PersonFavorite[] = [];
+const fixturePositionPins: PositionPin[] = [];
 
-function buildFixturePersonFavorites(): Repositories['personFavorites'] {
+function buildFixturePositionPins(): Repositories['positionPins'] {
   return {
     async list(userId, opts = {}) {
-      let rows = fixtureFavorites.filter((fav) => fav.userId === userId);
-      if (opts.reportId) rows = rows.filter((fav) => fav.reportId === opts.reportId);
-      if (opts.organization) rows = rows.filter((fav) => fav.organization === opts.organization);
+      let rows = fixturePositionPins.filter((pin) => pin.userId === userId);
+      if (opts.organization) rows = rows.filter((pin) => pin.organization === opts.organization);
       if (opts.search) {
         const q = opts.search.toLowerCase();
-        rows = rows.filter((fav) => fav.personName.toLowerCase().includes(q) || fav.employeeNumber.toLowerCase().includes(q) || fav.reportTitle.toLowerCase().includes(q));
+        rows = rows.filter((pin) => pin.posName.toLowerCase().includes(q) || pin.posNumber.toLowerCase().includes(q) || (pin.incumbentName ?? '').toLowerCase().includes(q) || (pin.employeeNumber ?? '').toLowerCase().includes(q));
       }
       const total = rows.length;
       rows = rows.slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt));
       const page = opts.page ?? 1;
       const pageSize = opts.pageSize ?? 50;
       const start = (page - 1) * pageSize;
-      return { data: rows.slice(start, start + pageSize).map((fav) => ({ ...fav })), total };
+      return { data: rows.slice(start, start + pageSize).map((pin) => ({ ...pin })), total };
     },
-    async create(userId, input: PersonFavoriteInput) {
-      const personId = input.personId.trim();
-      if (!personId) throw Object.assign(new Error('PERSON_ID_REQUIRED'), { code: 'PERSON_ID_REQUIRED' });
-      if (fixtureFavorites.some((fav) => fav.userId === userId && fav.personId === personId)) {
-        throw Object.assign(new Error('FAVORITE_EXISTS'), { code: 'FAVORITE_EXISTS' });
+    async create(userId, input: PositionPinInput) {
+      const posNumber = input.posNumber.trim();
+      if (!posNumber) throw Object.assign(new Error('PIN_REQUIRED'), { code: 'PIN_REQUIRED' });
+      if (fixturePositionPins.some((pin) => pin.userId === userId && pin.posNumber === posNumber && pin.organization === input.organization.trim())) {
+        throw Object.assign(new Error('PIN_EXISTS'), { code: 'PIN_EXISTS' });
       }
       const now = nowIso();
-      const fav: PersonFavorite = {
+      const pin: PositionPin = {
         id: newId(),
         userId,
-        personId,
-        employeeNumber: input.employeeNumber.trim(),
-        personName: input.personName.trim(),
-        reportId: input.reportId ?? null,
-        reportTitle: input.reportTitle.trim(),
+        posNumber,
+        posName: input.posName.trim(),
         organization: input.organization.trim(),
-        rowKey: input.rowKey ?? null,
+        incumbentName: input.incumbentName?.trim() || null,
+        employeeNumber: input.employeeNumber?.trim() || null,
         createdAt: now
       };
-      fixtureFavorites.push(fav);
-      return { ...fav };
+      fixturePositionPins.push(pin);
+      return { ...pin };
     },
-    async delete(userId, favoriteId) {
-      const idx = fixtureFavorites.findIndex((fav) => fav.id === favoriteId && fav.userId === userId);
+    async delete(userId, pinId) {
+      const idx = fixturePositionPins.findIndex((pin) => pin.id === pinId && pin.userId === userId);
       if (idx === -1) return false;
-      fixtureFavorites.splice(idx, 1);
+      fixturePositionPins.splice(idx, 1);
       return true;
     },
-    async deleteByKey(userId, personId) {
-      const idx = fixtureFavorites.findIndex((fav) => fav.userId === userId && fav.personId === personId);
+    async deleteByKey(userId, posNumber, organization) {
+      const idx = fixturePositionPins.findIndex((pin) => pin.userId === userId && pin.posNumber === posNumber && pin.organization === organization);
       if (idx === -1) return false;
-      fixtureFavorites.splice(idx, 1);
+      fixturePositionPins.splice(idx, 1);
       return true;
     },
-    async check(userId, personIds) {
-      return personIds.map((personId) => {
-        const fav = fixtureFavorites.find((candidate) => candidate.userId === userId && candidate.personId === personId);
-        return { personId, favorited: !!fav, favoriteId: fav?.id ?? null };
+    async check(userId, keys) {
+      return keys.map(({ posNumber, organization }) => {
+        const pin = fixturePositionPins.find((candidate) => candidate.userId === userId && candidate.posNumber === posNumber && candidate.organization === organization);
+        return { posNumber, organization, pinned: !!pin, pinId: pin?.id ?? null };
       });
     }
   };

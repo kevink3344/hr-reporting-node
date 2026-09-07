@@ -1,11 +1,11 @@
 import type {
   GenericReportRun,
   LoginSession,
-  PersonFavorite,
-  PersonFavoriteCheck,
   PersonPage,
   PersonRecord,
   PositionDetails,
+  PositionPin,
+  PositionPinCheck,
   ReportDefinition,
   ReportSection,
   ReportView,
@@ -294,51 +294,51 @@ export function deleteViewComment(session: LoginSession, viewId: string, comment
   });
 }
 
-// ---- Person Favorites (one per person per user, first report wins) ----
+// ---- Position Pins (one per position per user) ----
 
-export function getFavorites(
+export function getPositionPins(
   session: LoginSession | null | undefined,
-  filter?: { reportId?: string; organization?: string; search?: string; page?: number; pageSize?: number }
-): Promise<{ data: PersonFavorite[]; total: number }> {
+  filter?: { organization?: string; search?: string; page?: number; pageSize?: number }
+): Promise<{ data: PositionPin[]; total: number }> {
   const params = new URLSearchParams();
-  if (filter?.reportId) params.set('reportId', filter.reportId);
   if (filter?.organization) params.set('organization', filter.organization);
   if (filter?.search) params.set('search', filter.search);
   if (filter?.page) params.set('page', String(filter.page));
   if (filter?.pageSize) params.set('pageSize', String(filter.pageSize));
   const suffix = params.toString() ? `?${params.toString()}` : '';
-  return request<{ data: PersonFavorite[]; total: number }>(`/api/favorites${suffix}`, { headers: viewHeaders(session) });
+  return request<{ data: PositionPin[]; total: number }>(`/api/pins${suffix}`, { headers: viewHeaders(session) });
 }
 
-export function checkFavorites(
+export function checkPositionPins(
   session: LoginSession | null | undefined,
-  personIds: string[]
-): Promise<PersonFavoriteCheck[]> {
-  if (personIds.length === 0) return Promise.resolve([]);
-  const params = new URLSearchParams({ personIds: personIds.join(',') });
-  return request<PersonFavoriteCheck[]>(`/api/favorites/check?${params.toString()}`, { headers: viewHeaders(session) });
+  keys: { posNumber: string; organization: string }[]
+): Promise<PositionPinCheck[]> {
+  if (keys.length === 0) return Promise.resolve([]);
+  const params = new URLSearchParams({ keys: keys.map((k) => `${k.posNumber}:${k.organization}`).join(';') });
+  return request<PositionPinCheck[]>(`/api/pins/check?${params.toString()}`, { headers: viewHeaders(session) });
 }
 
-export function createFavorite(
+export function createPositionPin(
   session: LoginSession,
-  input: { personId: string; employeeNumber?: string; personName: string; reportId?: string | null; reportTitle: string; organization: string; rowKey?: string | null }
-): Promise<PersonFavorite> {
-  return request<PersonFavorite>('/api/favorites', {
+  input: { posNumber: string; posName: string; organization: string; incumbentName?: string | null; employeeNumber?: string | null }
+): Promise<PositionPin> {
+  return request<PositionPin>('/api/pins', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...viewHeaders(session) },
     body: JSON.stringify(input)
   });
 }
 
-export function deleteFavorite(session: LoginSession, id: string): Promise<void> {
-  return request<void>(`/api/favorites/${encodeURIComponent(id)}`, {
+export function deletePositionPin(session: LoginSession, id: string): Promise<void> {
+  return request<void>(`/api/pins/${encodeURIComponent(id)}`, {
     method: 'DELETE',
     headers: viewHeaders(session)
   });
 }
 
-export function deleteFavoriteByKey(session: LoginSession, personId: string): Promise<void> {
-  return request<void>(`/api/favorites/by-key/${encodeURIComponent(personId)}`, {
+export function deletePositionPinByKey(session: LoginSession, posNumber: string, organization: string): Promise<void> {
+  const params = new URLSearchParams({ organization });
+  return request<void>(`/api/pins/by-key/${encodeURIComponent(posNumber)}?${params.toString()}`, {
     method: 'DELETE',
     headers: viewHeaders(session)
   });

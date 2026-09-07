@@ -130,14 +130,14 @@ function repoErrorToStatus(error: unknown): { status: number; body: { error: str
     case 'INVITEE_REQUIRED':
     case 'COMMENT_BODY_REQUIRED':
     case 'HIGHLIGHT_RULE_INVALID':
-    case 'PERSON_ID_REQUIRED':
+    case 'PIN_REQUIRED':
       return { status: 400, body: { error: code } };
     case 'SECTION_TITLE_CONFLICT':
     case 'REPORT_TITLE_CONFLICT':
     case 'VIEW_NAME_CONFLICT':
     case 'INVITE_ALREADY_EXISTS':
     case 'VERSION_CONFLICT':
-    case 'FAVORITE_EXISTS':
+    case 'PIN_EXISTS':
       return { status: 409, body: { error: code } };
     case 'FORBIDDEN':
       return { status: 403, body: { error: code } };
@@ -150,14 +150,12 @@ function repoErrorToStatus(error: unknown): { status: number; body: { error: str
   }
 }
 
-const favoriteInputSchema = z.object({
-  personId: z.string().trim().min(1).max(64),
-  employeeNumber: z.string().trim().max(32).default(''),
-  personName: z.string().trim().min(1).max(200),
-  reportId: z.string().trim().min(1).nullable().optional(),
-  reportTitle: z.string().trim().min(1).max(200),
+const positionPinInputSchema = z.object({
+  posNumber: z.string().trim().min(1).max(64),
+  posName: z.string().trim().min(1).max(200),
   organization: z.string().trim().min(1).max(200),
-  rowKey: z.string().trim().max(200).nullable().optional()
+  incumbentName: z.string().trim().max(200).nullable().optional(),
+  employeeNumber: z.string().trim().max(32).nullable().optional()
 });
 
 export function createApp(repositories: Repositories = fixtureRepositories) {
@@ -838,42 +836,42 @@ export function createApp(repositories: Repositories = fixtureRepositories) {
     }
   });
 
-  // ---- Person Favorites (one per person per user, first report wins) ----
-  application.get('/api/favorites', async (request, response, next) => {
+  // ---- Position Pins (one per position per user) ----
+  application.get('/api/pins', async (request, response, next) => {
     try {
       const userId = callerId(request);
-      const reportId = typeof request.query.reportId === 'string' ? request.query.reportId.trim() || undefined : undefined;
       const organization = typeof request.query.organization === 'string' ? request.query.organization.trim() || undefined : undefined;
       const search = typeof request.query.search === 'string' ? request.query.search.trim() || undefined : undefined;
       const page = request.query.page ? Number(request.query.page) : 1;
       const pageSize = request.query.pageSize ? Number(request.query.pageSize) : 50;
-      const result = await repositories.personFavorites.list(userId, { reportId, organization, search, page, pageSize });
+      const result = await repositories.positionPins.list(userId, { organization, search, page, pageSize });
       response.json(result);
     } catch (error) { next(error); }
   });
 
-  application.get('/api/favorites/check', async (request, response, next) => {
+  application.get('/api/pins/check', async (request, response, next) => {
     try {
       const userId = callerId(request);
-      const raw = typeof request.query.personIds === 'string' ? request.query.personIds : '';
-      const personIds = raw.split(',').map((s) => s.trim()).filter(Boolean).slice(0, 100);
-      const result = await repositories.personFavorites.check(userId, personIds);
+      const raw = typeof request.query.keys === 'string' ? request.query.keys : '';
+      const keys = raw.split(';').map((chunk) => {
+        const [posNumber, organization] = chunk.split(':').map((s) => s.trim());
+        return { posNumber, organization };
+      }).filter((k) => k.posNumber && k.organization).slice(0, 100);
+      const result = await repositories.positionPins.check(userId, keys);
       response.json(result);
     } catch (error) { next(error); }
   });
 
-  application.post('/api/favorites', async (request, response, next) => {
+  application.post('/api/pins', async (request, response, next) => {
     try {
       const userId = callerId(request);
-      const input = favoriteInputSchema.parse(request.body);
-      const created = await repositories.personFavorites.create(userId, {
-        personId: input.personId,
-        employeeNumber: input.employeeNumber ?? '',
-        personName: input.personName,
-        reportId: input.reportId ?? null,
-        reportTitle: input.reportTitle,
+      const input = positionPinInputSchema.parse(request.body);
+      const created = await repositories.positionPins.create(userId, {
+        posNumber: input.posNumber,
+        posName: input.posName,
         organization: input.organization,
-        rowKey: input.rowKey ?? null
+        incumbentName: input.incumbentName ?? null,
+        employeeNumber: input.employeeNumber ?? null
       });
       response.status(201).json(created);
     } catch (error) {
@@ -883,21 +881,22 @@ export function createApp(repositories: Repositories = fixtureRepositories) {
     }
   });
 
-  application.delete('/api/favorites/by-key/:personId', async (request, response, next) => {
+  application.delete('/api/pins/by-key/:posNumber', async (request, response, next) => {
     try {
       const userId = callerId(request);
-      const personId = routeId(request.params.personId);
-      const removed = await repositories.personFavorites.deleteByKey(userId, personId);
-      if (!removed) { response.status(404).json({ error: 'FAVORITE_NOT_FOUND' }); return; }
+      const posNumber = routeId(request.params.posNumber);
+      const organization = typeof request.query.organization === 'string' ? request.query.organization.trim() : '';
+      const removed = await repositories.positionPins.deleteByKey(userId, posNumber, organization);
+      if (!removed) { response.status(404).json({ error: 'PIN_NOT_FOUND' }); return; }
       response.status(204).end();
     } catch (error) { next(error); }
   });
 
-  application.delete('/api/favorites/:id', async (request, response, next) => {
+  application.delete('/api/pins/:id', async (request, response, next) => {
     try {
       const userId = callerId(request);
-      const removed = await repositories.personFavorites.delete(userId, routeId(request.params.id));
-      if (!removed) { response.status(404).json({ error: 'FAVORITE_NOT_FOUND' }); return; }
+      const removed = await repositories.positionPins.delete(userId, routeId(request.params.id));
+      if (!removed) { response.status(404).json({ error: 'PIN_NOT_FOUND' }); return; }
       response.status(204).end();
     } catch (error) { next(error); }
   });

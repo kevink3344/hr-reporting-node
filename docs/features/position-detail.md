@@ -301,8 +301,9 @@ the record-layout toolbar, or the drag-reorder/reset/save-layout controls that t
 Employee Record has. It renders as a static, information-only view. There is no
 `record-layout` persistence for positions.
 
-Wire `onOpenPosition` into `ReportsPage` (and `FavoritesPage` / any other caller
-that renders report rows) alongside `onOpenRecord`.
+Wire `onOpenPosition` into `ReportsPage` (and `PositionsPage` / any other caller
+that renders positioned rows) alongside `onOpenRecord`. `PositionsPage` opens the
+Position Details drawer via `openPositionByNumber(posNumber, organization)`.
 
 ### 5. Shared drawer state (App.tsx)
 

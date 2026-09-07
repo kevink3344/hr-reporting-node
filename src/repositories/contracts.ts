@@ -2,7 +2,7 @@ import type {
   GenericReportRun,
   OpenPositionRow,
   Person,
-  PersonFavorite,
+  PositionPin,
   PersonRecord,
   PositionDetails,
   ReportDefinition,
@@ -170,28 +170,27 @@ export interface ReportViewCommentsRepository {
   delete(viewId: string, commentId: string, callerId: string): Promise<boolean>;
 }
 
-export type PersonFavoriteInput = {
-  personId: string;
-  employeeNumber: string;
-  personName: string;
-  reportId: string | null;
-  reportTitle: string;
+export type PositionPinInput = {
+  posNumber: string;
+  posName: string;
   organization: string;
-  rowKey?: string | null;
+  incumbentName?: string | null;
+  employeeNumber?: string | null;
 };
 
-export type PersonFavoriteCheck = {
-  personId: string;
-  favorited: boolean;
-  favoriteId: string | null;
+export type PositionPinCheck = {
+  posNumber: string;
+  organization: string;
+  pinned: boolean;
+  pinId: string | null;
 };
 
-export interface PersonFavoritesRepository {
-  list(userId: string, opts?: { reportId?: string; organization?: string; search?: string; page?: number; pageSize?: number }): Promise<{ data: PersonFavorite[]; total: number }>;
-  create(userId: string, input: PersonFavoriteInput): Promise<PersonFavorite>;
-  delete(userId: string, favoriteId: string): Promise<boolean>;
-  deleteByKey(userId: string, personId: string): Promise<boolean>;
-  check(userId: string, personIds: string[]): Promise<PersonFavoriteCheck[]>;
+export interface PositionPinsRepository {
+  list(userId: string, opts?: { organization?: string; search?: string; page?: number; pageSize?: number }): Promise<{ data: PositionPin[]; total: number }>;
+  create(userId: string, input: PositionPinInput): Promise<PositionPin>;
+  delete(userId: string, pinId: string): Promise<boolean>;
+  deleteByKey(userId: string, posNumber: string, organization: string): Promise<boolean>;
+  check(userId: string, keys: { posNumber: string; organization: string }[]): Promise<PositionPinCheck[]>;
 }
 
 export type Repositories = {
@@ -205,5 +204,5 @@ export type Repositories = {
   reportViews: ReportViewsRepository;
   reportViewInvites: ReportViewInvitesRepository;
   reportViewComments: ReportViewCommentsRepository;
-  personFavorites: PersonFavoritesRepository;
+  positionPins: PositionPinsRepository;
 };

@@ -258,21 +258,20 @@ export type ReportViewComment = {
   updatedAt: string;
 };
 
-export type PersonFavorite = {
+export type PositionPin = {
   id: string;
   userId: string;
-  personId: string;
-  employeeNumber: string;
-  personName: string;
-  reportId: string | null;
-  reportTitle: string;
+  posNumber: string;
+  posName: string;
   organization: string;
-  rowKey: string | null;
+  incumbentName: string | null;
+  employeeNumber: string | null;
   createdAt: string;
 };
 
-export type PersonFavoriteCheck = {
-  personId: string;
-  favorited: boolean;
-  favoriteId: string | null;
+export type PositionPinCheck = {
+  posNumber: string;
+  organization: string;
+  pinned: boolean;
+  pinId: string | null;
 };

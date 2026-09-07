@@ -401,52 +401,54 @@ export const openApiDocument = {
         }
       }
     },
-    '/favorites': {
+    '/pins': {
       get: {
         tags: ['Reports'],
-        operationId: 'listFavorites',
+        operationId: 'listPositionPins',
         parameters: [
-          { name: 'reportId', in: 'query', schema: { type: 'string' } },
           { name: 'organization', in: 'query', schema: { type: 'string' } },
           { name: 'search', in: 'query', schema: { type: 'string' } },
           { name: 'page', in: 'query', schema: { type: 'integer', minimum: 1 } },
           { name: 'pageSize', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100 } }
         ],
-        responses: { '200': { description: 'Favorites for caller', content: { 'application/json': { schema: { $ref: '#/components/schemas/PersonFavoritePage' } } } } }
+        responses: { '200': { description: 'Position pins for caller', content: { 'application/json': { schema: { $ref: '#/components/schemas/PositionPinPage' } } } } }
       },
       post: {
         tags: ['Reports'],
-        operationId: 'createFavorite',
-        requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/PersonFavoriteInput' } } } },
+        operationId: 'createPositionPin',
+        requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/PositionPinInput' } } } },
         responses: {
-          '201': { description: 'Favorite created', content: { 'application/json': { schema: { $ref: '#/components/schemas/PersonFavorite' } } } },
+          '201': { description: 'Position pin created', content: { 'application/json': { schema: { $ref: '#/components/schemas/PositionPin' } } } },
           '400': { description: 'Validation error' },
-          '409': { description: 'Already favorited (one per person per user)' }
+          '409': { description: 'Already pinned (one per position per user)' }
         }
       }
     },
-    '/favorites/check': {
+    '/pins/check': {
       get: {
         tags: ['Reports'],
-        operationId: 'checkFavorites',
-        parameters: [{ name: 'personIds', in: 'query', required: true, schema: { type: 'string', description: 'Comma-separated personIds (max 100)' } }],
-        responses: { '200': { description: 'Favorite checks', content: { 'application/json': { schema: { type: 'array', items: { $ref: '#/components/schemas/PersonFavoriteCheck' } } } } } }
+        operationId: 'checkPositionPins',
+        parameters: [{ name: 'keys', in: 'query', required: true, schema: { type: 'string', description: 'Semicolon-separated posNumber:organization keys (max 100)' } }],
+        responses: { '200': { description: 'Position pin checks', content: { 'application/json': { schema: { type: 'array', items: { $ref: '#/components/schemas/PositionPinCheck' } } } } } }
       }
     },
-    '/favorites/by-key/{personId}': {
+    '/pins/by-key/{posNumber}': {
       delete: {
         tags: ['Reports'],
-        operationId: 'deleteFavoriteByKey',
-        parameters: [{ name: 'personId', in: 'path', required: true, schema: { type: 'string' } }],
-        responses: { '204': { description: 'Favorite removed' }, '404': { description: 'Favorite not found' } }
+        operationId: 'deletePositionPinByKey',
+        parameters: [
+          { name: 'posNumber', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'organization', in: 'query', required: true, schema: { type: 'string' } }
+        ],
+        responses: { '204': { description: 'Position pin removed' }, '404': { description: 'Position pin not found' } }
       }
     },
-    '/favorites/{id}': {
+    '/pins/{id}': {
       delete: {
         tags: ['Reports'],
-        operationId: 'deleteFavorite',
+        operationId: 'deletePositionPin',
         parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
-        responses: { '204': { description: 'Favorite removed' }, '404': { description: 'Favorite not found' } }
+        responses: { '204': { description: 'Position pin removed' }, '404': { description: 'Position pin not found' } }
       }
     },
     '/report-views/{id}/comments/{commentId}': {
@@ -817,50 +819,47 @@ export const openApiDocument = {
           updatedAt: { type: 'string' }
         }
       },
-      PersonFavorite: {
+      PositionPin: {
         type: 'object',
-        required: ['id', 'userId', 'personId', 'employeeNumber', 'personName', 'reportTitle', 'organization', 'createdAt'],
+        required: ['id', 'userId', 'posNumber', 'posName', 'organization', 'createdAt'],
         properties: {
           id: { type: 'string' },
           userId: { type: 'string' },
-          personId: { type: 'string' },
-          employeeNumber: { type: 'string' },
-          personName: { type: 'string' },
-          reportId: { type: 'string', nullable: true },
-          reportTitle: { type: 'string' },
+          posNumber: { type: 'string' },
+          posName: { type: 'string' },
           organization: { type: 'string' },
-          rowKey: { type: 'string', nullable: true },
+          incumbentName: { type: 'string', nullable: true },
+          employeeNumber: { type: 'string', nullable: true },
           createdAt: { type: 'string' }
         }
       },
-      PersonFavoriteInput: {
+      PositionPinInput: {
         type: 'object',
-        required: ['personId', 'personName', 'reportTitle', 'organization'],
+        required: ['posNumber', 'posName', 'organization'],
         properties: {
-          personId: { type: 'string', maxLength: 64 },
-          employeeNumber: { type: 'string', maxLength: 32 },
-          personName: { type: 'string', maxLength: 200 },
-          reportId: { type: 'string', nullable: true },
-          reportTitle: { type: 'string', maxLength: 200 },
+          posNumber: { type: 'string', maxLength: 64 },
+          posName: { type: 'string', maxLength: 200 },
           organization: { type: 'string', maxLength: 200 },
-          rowKey: { type: 'string', nullable: true, maxLength: 200 }
+          incumbentName: { type: 'string', nullable: true, maxLength: 200 },
+          employeeNumber: { type: 'string', nullable: true, maxLength: 32 }
         }
       },
-      PersonFavoritePage: {
+      PositionPinPage: {
         type: 'object',
         required: ['data', 'total'],
         properties: {
-          data: { type: 'array', items: { $ref: '#/components/schemas/PersonFavorite' } },
+          data: { type: 'array', items: { $ref: '#/components/schemas/PositionPin' } },
           total: { type: 'integer' }
         }
       },
-      PersonFavoriteCheck: {
+      PositionPinCheck: {
         type: 'object',
-        required: ['personId', 'favorited', 'favoriteId'],
+        required: ['posNumber', 'organization', 'pinned', 'pinId'],
         properties: {
-          personId: { type: 'string' },
-          favorited: { type: 'boolean' },
-          favoriteId: { type: 'string', nullable: true }
+          posNumber: { type: 'string' },
+          organization: { type: 'string' },
+          pinned: { type: 'boolean' },
+          pinId: { type: 'string', nullable: true }
         }
       },
       ReportViewCommentInput: {

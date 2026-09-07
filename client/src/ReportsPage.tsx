@@ -3,7 +3,6 @@ import {
   AlertCircle,
   ArrowLeft,
   BarChart3,
-  Bookmark,
   Building2,
   Columns3,
   Check,
@@ -18,14 +17,10 @@ import {
   X
 } from 'lucide-react';
 import {
-  checkFavorites,
-  createFavorite,
   createReportView,
   createViewComment,
   createViewInvite,
-  deleteFavoriteByKey,
   deleteReportView,
-  getPeople,
   getReportViews,
   getReports,
   getReportSections,
@@ -213,27 +208,12 @@ function GenericReportView({
     setActiveHighlightFilterId(null);
   }, [result.report.id, result.organization]);
 
-  // ---- Favorites: subtle pin indicator + toggle per row (one per person globally, first report wins) ----
-  const personIdCache = useRef<Map<string, string>>(new Map());
-  const [favoritedPersonIds, setFavoritedPersonIds] = useState<Set<string>>(new Set());
-  const [favoriteIdByPersonId, setFavoriteIdByPersonId] = useState<Map<string, string>>(new Map());
-
   function getEmpNumber(row: Record<string, unknown>): string {
     const raw = row['emp_number'] ?? row['empNumber'] ?? row['employee_number'] ?? row['employeeNumber'] ?? row['employee_no'] ?? row['emp_no'] ?? (() => {
       const k = Object.keys(row).find((c) => c.toLowerCase().replace(/[^a-z0-9]/g, '') === 'empnumber' || c.toLowerCase().replace(/[^a-z0-9]/g, '') === 'employeenumber');
       return k ? row[k] : '';
     })();
     return String(raw ?? '').trim();
-  }
-
-  function getPersonName(row: Record<string, unknown>): string {
-    const candidates = ['full_name', 'Full name', 'fullName', 'person_name', 'Person', 'Name', 'name'];
-    for (const key of candidates) {
-      if (row[key] !== undefined && row[key] !== null && String(row[key]).trim()) return String(row[key]).trim();
-    }
-    const nameCol = displayColumns.find((c) => c.toLowerCase().includes('name')) ?? displayColumns[0];
-    if (nameCol && row[nameCol] !== undefined) return String(row[nameCol] ?? '').trim();
-    return getEmpNumber(row) || 'Unknown';
   }
 
   // A column is a "position" column when it carries a pos_number / number /
@@ -254,124 +234,6 @@ function GenericReportView({
   function isPersonColumn(column: string): boolean {
     const norm = column.toLowerCase().replace(/[^a-z0-9]/g, '');
     return norm === 'fullname' || norm === 'name' || norm === 'person' || norm === 'employeename' || norm === 'empname' || norm === 'employee' || norm === 'empnumber' || norm === 'employeenumber';
-  }
-
-  useEffect(() => {
-    if (!session || result.rows.length === 0) {
-      setFavoritedPersonIds(new Set());
-      setFavoriteIdByPersonId(new Map());
-      return;
-    }
-    let cancelled = false;
-    async function loadFavorites() {
-      try {
-        const empNumbers = Array.from(new Set(result.rows.map((r) => getEmpNumber(r as Record<string, unknown>)).filter(Boolean)));
-        if (empNumbers.length === 0) {
-          if (!cancelled) {
-            setFavoritedPersonIds(new Set());
-            setFavoriteIdByPersonId(new Map());
-          }
-          return;
-        }
-        const toResolve = empNumbers.filter((emp) => !personIdCache.current.has(emp));
-        await Promise.all(toResolve.map(async (emp) => {
-          try {
-            const res = await getPeople(emp, '');
-            const person = res.data.find((p) => p.employeeNumber === emp) ?? res.data[0];
-            if (person) personIdCache.current.set(emp, person.personId);
-          } catch { /* ignore */ }
-        }));
-        const personIds = empNumbers.map((emp) => personIdCache.current.get(emp)).filter(Boolean) as string[];
-        if (personIds.length === 0) {
-          if (!cancelled) {
-            setFavoritedPersonIds(new Set());
-            setFavoriteIdByPersonId(new Map());
-          }
-          return;
-        }
-        const checks = await checkFavorites(session, personIds);
-        if (cancelled) return;
-        const favSet = new Set<string>();
-        const idMap = new Map<string, string>();
-        for (const c of checks) {
-          if (c.favorited) {
-            favSet.add(c.personId);
-            if (c.favoriteId) idMap.set(c.personId, c.favoriteId);
-          }
-        }
-        setFavoritedPersonIds(favSet);
-        setFavoriteIdByPersonId(idMap);
-      } catch {
-        if (!cancelled) {
-          setFavoritedPersonIds(new Set());
-          setFavoriteIdByPersonId(new Map());
-        }
-      }
-    }
-    void loadFavorites();
-    return () => { cancelled = true; };
-  }, [session, result.rows, result.report.id, result.organization]);
-
-  async function toggleFavorite(row: Record<string, unknown>, e?: React.MouseEvent) {
-    if (e) e.stopPropagation();
-    if (!session) return;
-    const empNo = getEmpNumber(row);
-    if (!empNo) return;
-    let personId = personIdCache.current.get(empNo);
-    if (!personId) {
-      try {
-        const res = await getPeople(empNo, '');
-        const person = res.data.find((p) => p.employeeNumber === empNo) ?? res.data[0];
-        if (!person) return;
-        personId = person.personId;
-        personIdCache.current.set(empNo, personId);
-      } catch { return; }
-    }
-    const isFav = favoritedPersonIds.has(personId);
-    const personName = getPersonName(row);
-    const rowKey = rowKeyForRow(row, result.columns, declaredKey);
-    // optimistic
-    setFavoritedPersonIds((prev) => {
-      const next = new Set(prev);
-      if (isFav) next.delete(personId!);
-      else next.add(personId!);
-      return next;
-    });
-    try {
-      if (isFav) {
-        await deleteFavoriteByKey(session, personId);
-        setFavoriteIdByPersonId((prev) => {
-          const next = new Map(prev);
-          next.delete(personId!);
-          return next;
-        });
-      } else {
-        const created = await createFavorite(session, {
-          personId,
-          employeeNumber: empNo,
-          personName,
-          reportId: result.report.id,
-          reportTitle: result.report.title,
-          organization: result.organization,
-          rowKey
-        });
-        setFavoriteIdByPersonId((prev) => {
-          const next = new Map(prev);
-          next.set(personId!, created.id);
-          return next;
-        });
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : '';
-      if (!isFav && msg === 'FAVORITE_EXISTS') return;
-      // revert
-      setFavoritedPersonIds((prev) => {
-        const next = new Set(prev);
-        if (isFav) next.add(personId!);
-        else next.delete(personId!);
-        return next;
-      });
-    }
   }
 
   function ruleMatchesRow(rule: ReportHighlightRule, row: Record<string, unknown>): boolean {
@@ -601,7 +463,7 @@ function GenericReportView({
       <div className="report-views-bar-left">
         <div className="report-views-dropdown">
           <button className="report-views-trigger" onClick={() => setViewsOpen((v) => !v)} aria-expanded={viewsOpen} aria-haspopup="listbox">
-            <Bookmark size={15} />
+            <Columns3 size={15} />
             <span>{activeView?.name ?? 'Default view'}</span>
             <ChevronDown size={14} className={viewsOpen ? 'chevron-open' : ''} />
           </button>
@@ -630,7 +492,7 @@ function GenericReportView({
           )}
         </div>
         <button className={`export-button ${isDirty ? 'export-button--dirty' : ''}`} onClick={openSaveModal}>
-          <Bookmark size={15} />{activeView ? 'Update view' : 'Save view'}{isDirty ? ' •' : ''}
+          <Columns3 size={15} />{activeView ? 'Update view' : 'Save view'}{isDirty ? ' •' : ''}
         </button>
         {activeView && (
           <>
@@ -761,7 +623,6 @@ function GenericReportView({
           <table className="report-table">
             <thead>
               <tr>
-                <th className="report-pin-col-head" aria-hidden="true" />
                 {displayColumns.map((column) => (
                   <th
                     key={column}
@@ -787,8 +648,6 @@ function GenericReportView({
                 const record = row as Record<string, unknown>;
                 const empNo = getEmpNumber(record);
                 const clickable = Boolean(empNo && onOpenRecord);
-                const personIdForRow = personIdCache.current.get(empNo);
-                const isFavorited = personIdForRow ? favoritedPersonIds.has(personIdForRow) : false;
                 const nameCol = displayColumns.find((c) => c.toLowerCase().includes('name')) ?? displayColumns[0];
                 const sub = (record as GenericReportRowWithSubreport).__subreport;
                 return (
@@ -802,22 +661,6 @@ function GenericReportView({
                       tabIndex={clickable ? 0 : undefined}
                       onKeyDown={clickable ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpenRecord!(empNo); } } : undefined}
                     >
-                      {session && empNo ? (
-                        <td className="report-pin-cell" aria-label="Pin to Favorites">
-                          <button
-                            type="button"
-                            className={`report-pin-toggle ${isFavorited ? 'report-pin-toggle--active' : ''}`}
-                            onClick={(e) => void toggleFavorite(record, e)}
-                            aria-label={isFavorited ? 'Remove from Favorites' : 'Pin to Favorites'}
-                            title={isFavorited ? 'Favorited — click to remove' : 'Pin to Favorites'}
-                            aria-pressed={isFavorited}
-                          >
-                            <Bookmark size={16} fill={isFavorited ? 'currentColor' : 'none'} />
-                          </button>
-                        </td>
-                      ) : (
-                        <td className="report-pin-cell" aria-hidden="true" />
-                      )}
                       {displayColumns.map((column) => {
                         const cellValue = record[column] === null || record[column] === undefined ? '' : String(record[column]);
                         const posNo = getPosNumber(record);
@@ -1016,7 +859,7 @@ function GenericReportView({
   </div>;
 }
 
-export function ReportsPage({ schools, session, onManage, onOpenRecord, onOpenPosition, favoritesNav, onFavoritesNavConsumed }: { schools: School[]; session: LoginSession | null; onManage?: () => void; onOpenRecord?: (employeeNumber: string) => void; onOpenPosition?: (posNumber: string, organization: string) => void; favoritesNav?: { reportId: string; organization: string } | null; onFavoritesNavConsumed?: () => void }) {
+export function ReportsPage({ schools, session, onManage, onOpenRecord, onOpenPosition }: { schools: School[]; session: LoginSession | null; onManage?: () => void; onOpenRecord?: (employeeNumber: string) => void; onOpenPosition?: (posNumber: string, organization: string) => void }) {
   const [schoolId, setSchoolId] = useState('');
   const [sections, setSections] = useState<ReportSection[]>([]);
   const [reports, setReports] = useState<ReportDefinition[]>([]);

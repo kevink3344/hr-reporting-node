@@ -4,7 +4,7 @@ import type { HomePage } from './homePage';
 const HOME_PAGE_OPTIONS: { value: HomePage; label: string }[] = [
   { value: 'home', label: 'Home' },
   { value: 'reports', label: 'Reports' },
-  { value: 'favorites', label: 'Favorites' },
+  { value: 'positions', label: 'Positions' },
 ];
 
 // User-facing settings drawer (opened from the topbar gear icon). Holds the

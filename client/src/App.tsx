@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { AlertCircle, ArrowUpRight, BarChart3, Bookmark, Building2, Check, ChevronDown, ChevronUp, FileText, GripVertical, Home, LogOut, Menu, Moon, Palette, Search, Settings2, SlidersHorizontal, Sun, Users, X } from 'lucide-react';
-import { checkFavorites, getFavorites, getPeople, getPersonRecord, getPositionDetails, getSchools, login } from './api';
+import { AlertCircle, ArrowUpRight, BarChart3, Building2, Check, ChevronDown, ChevronUp, FileText, GripVertical, Home, LogOut, Menu, Moon, Palette, Pin, PinOff, Search, Settings2, SlidersHorizontal, Sun, Trash2, Users, X } from 'lucide-react';
+import { checkPositionPins, createPositionPin, deletePositionPin, deletePositionPinByKey, getPeople, getPersonRecord, getPositionDetails, getPositionPins, getSchools, login } from './api';
 import type { LoginSession, Person, PersonRecord, PositionDetails, School } from './types';
-import { FavoritesPage } from './FavoritesPage';
+import { PositionsPage } from './PositionsPage';
 import { ReportsPage } from './ReportsPage';
 import { SettingsPage } from './SettingsPage';
 import { UserSettingsPage } from './UserSettingsPage';
@@ -225,7 +225,7 @@ function EmployeeRecord({
   const tones: Partial<Record<RecordSectionId, string>> = { leave: 'leave-section' };
 
   return <div className="employee-record">
-    <div className="record-title"><div><p className="eyebrow">Employee record</p><h3>{record.identity.fullName}</h3>{(record as unknown as { _favorited?: boolean })._favorited && <span className="record-pin" title="Favorited"><Bookmark size={13} aria-hidden="true" /> Favorited</span>}</div><div className="record-title-actions"><span className="record-active"><span className="status-dot" />Active</span><button className="icon-button" onClick={onClose} aria-label="Close employee record" title="Close employee record"><X size={17} /></button></div></div>
+    <div className="record-title"><div><p className="eyebrow">Employee record</p><h3>{record.identity.fullName}</h3></div><div className="record-title-actions"><span className="record-active"><span className="status-dot" />Active</span><button className="icon-button" onClick={onClose} aria-label="Close employee record" title="Close employee record"><X size={17} /></button></div></div>
     {layout.map((id, index) => <DraggableRecordSection
       key={id}
       id={id}
@@ -251,7 +251,7 @@ function EmployeeRecord({
 
 // Read-only Position Details drawer — non-draggable, mirrors the field layout
 // of the employee record but never reorders.
-function PositionDetailView({ details, onClose, onOpenRecord }: { details: PositionDetails; onClose: () => void; onOpenRecord: (employeeNumber: string) => void }) {
+function PositionDetailView({ details, onClose, onOpenRecord, pinned, onTogglePin }: { details: PositionDetails; onClose: () => void; onOpenRecord: (employeeNumber: string) => void; pinned: boolean; onTogglePin: () => void }) {
   const { position, incumbent, accountNumber, org, vacant } = details;
   return <div className="employee-record">
     <div className="record-title">
@@ -262,7 +262,12 @@ function PositionDetailView({ details, onClose, onOpenRecord }: { details: Posit
           <span className="status-dot" />{vacant ? 'Vacant' : 'Filled'}
         </span>
       </div>
-      <div className="record-title-actions"><button className="icon-button" onClick={onClose} aria-label="Close position details" title="Close position details"><X size={17} /></button></div>
+      <div className="record-title-actions">
+        <button className={`icon-button ${pinned ? 'position-pin-toggle--active' : 'position-pin-toggle'}`} onClick={onTogglePin} aria-label={pinned ? 'Unpin position' : 'Pin position'} title={pinned ? 'Unpin position' : 'Pin position'} aria-pressed={pinned}>
+          {pinned ? <Pin size={17} fill="currentColor" /> : <PinOff size={17} />}
+        </button>
+        <button className="icon-button" onClick={onClose} aria-label="Close position details" title="Close position details"><X size={17} /></button>
+      </div>
     </div>
     <div className="record-grid">
       <RecordField label="Position number" value={position.posNumber} mono />
@@ -341,13 +346,14 @@ export function App() {
   const [positionDetails, setPositionDetails] = useState<PositionDetails | null>(null);
   const [positionLoading, setPositionLoading] = useState(false);
   const [positionError, setPositionError] = useState('');
+  const [positionPin, setPositionPin] = useState<{ pinned: boolean; pinId: string | null }>({ pinned: false, pinId: null });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
-  const [activeView, setActiveView] = useState<'home' | 'reports' | 'favorites' | 'settings'>('home');
+  const [activeView, setActiveView] = useState<'home' | 'reports' | 'positions' | 'settings'>('home');
   const [homePage, setHomePage] = useState<HomePage>('home');
   const [userSettingsOpen, setUserSettingsOpen] = useState(false);
-  const [favoritesCount, setFavoritesCount] = useState(0);
+  const [positionPinsCount, setPositionPinsCount] = useState(0);
   const isAdmin = session?.user.roles.includes('hr_admin') ?? false;
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     const saved = window.localStorage.getItem('hr-report-theme');
@@ -373,7 +379,7 @@ export function App() {
   useEffect(() => {
     const page = sessionUserId ? loadHomePage(sessionUserId) : 'home';
     setHomePage(page);
-    if (page === 'reports' || page === 'favorites') {
+    if (page === 'reports' || page === 'positions') {
       setActiveView(page);
     } else {
       setActiveView('home');
@@ -494,37 +500,59 @@ export function App() {
     } catch { /* ignore */ }
   }
 
-  function navigate(view: 'home' | 'reports' | 'favorites' | 'settings') {
+  function navigate(view: 'home' | 'reports' | 'positions' | 'settings') {
     if (view === 'settings' && !isAdmin) return;
     setActiveView(view);
     setMenuOpen(false);
   }
 
-  // Keep favorites count fresh for nav badge
+  // Keep pinned-position count fresh for nav badge
   useEffect(() => {
-    if (!session) { setFavoritesCount(0); return; }
-    getFavorites(session, { page: 1, pageSize: 1 }).then((res) => setFavoritesCount(res.total)).catch(() => {});
+    if (!session) { setPositionPinsCount(0); return; }
+    getPositionPins(session, { page: 1, pageSize: 1 }).then((res) => setPositionPinsCount(res.total)).catch(() => {});
   }, [session, activeView]);
 
-  // Favorites: open report runner from Favorites page
-  const [favoritesReportNav, setFavoritesReportNav] = useState<{ reportId: string; organization: string } | null>(null);
-  function handleOpenFavoriteReport(reportId: string, organization: string) {
-    setFavoritesReportNav({ reportId, organization });
-    setActiveView('reports');
-    setMenuOpen(false);
-  }
-
-  // Employee record: subtle pin indicator (no toggle per Q4)
-  const [recordFavorite, setRecordFavorite] = useState(false);
+  // Position pin state for the currently-open position drawer.
+  const [positionPinId, setPositionPinId] = useState<string | null>(null);
+  const [positionPinned, setPositionPinned] = useState(false);
   useEffect(() => {
-    if (!session || !personRecord) { setRecordFavorite(false); return; }
-    // personRecord.personId is the canonical person id
-    const pid = (personRecord as unknown as { personId?: string }).personId ?? selectedPerson?.personId;
-    if (!pid) { setRecordFavorite(false); return; }
-    checkFavorites(session, [pid]).then((checks) => {
-      setRecordFavorite(checks[0]?.favorited ?? false);
-    }).catch(() => setRecordFavorite(false));
-  }, [session, personRecord, selectedPerson?.personId]);
+    if (!session || !positionDetails) { setPositionPinned(false); setPositionPinId(null); return; }
+    const posNumber = positionDetails.position.posNumber;
+    const org = positionDetails.org;
+    checkPositionPins(session, [{ posNumber, organization: org }]).then((checks) => {
+      setPositionPinned(checks[0]?.pinned ?? false);
+      setPositionPinId(checks[0]?.pinId ?? null);
+    }).catch(() => { setPositionPinned(false); setPositionPinId(null); });
+  }, [session, positionDetails]);
+
+  async function togglePositionPin() {
+    if (!session || !positionDetails) return;
+    const posNumber = positionDetails.position.posNumber;
+    const org = positionDetails.org;
+    const posName = positionDetails.position.posName || `Position ${posNumber}`;
+    const incumbent = positionDetails.incumbent;
+    try {
+      if (positionPinned) {
+        if (positionPinId) await deletePositionPin(session, positionPinId);
+        else await deletePositionPinByKey(session, posNumber, org);
+        setPositionPinned(false);
+        setPositionPinId(null);
+      } else {
+        const created = await createPositionPin(session, {
+          posNumber,
+          posName,
+          organization: org,
+          incumbentName: incumbent?.fullName ?? null,
+          employeeNumber: incumbent?.employeeNumber ?? null
+        });
+        setPositionPinned(true);
+        setPositionPinId(created.id);
+      }
+      getPositionPins(session, { page: 1, pageSize: 1 }).then((res) => setPositionPinsCount(res.total)).catch(() => {});
+    } catch {
+      // no-op; keep current state on failure
+    }
+  }
 
   useEffect(() => {
     if (!session) return;
@@ -620,6 +648,8 @@ export function App() {
     setPositionDetails(null);
     setPositionLoading(false);
     setPositionError('');
+    setPositionPinned(false);
+    setPositionPinId(null);
   }
 
   useEffect(() => {
@@ -659,7 +689,7 @@ export function App() {
       {menuOpen && <button className="nav-scrim" aria-label="Close navigation" onClick={() => setMenuOpen(false)} />}
       <aside className={`side-navigation ${menuOpen ? 'open' : ''}`} aria-label="Main navigation">
         <div className="side-navigation-heading"><span className="brand-mark"><FileText size={18} /></span><strong>HR Reporting</strong><button className="icon-button" onClick={() => setMenuOpen(false)} aria-label="Close navigation" title="Close navigation"><X size={17} /></button></div>
-        <nav><button className={activeView === 'home' ? 'nav-item active' : 'nav-item'} onClick={() => navigate('home')}><Home size={18} /><span>Home</span></button><button className={activeView === 'reports' ? 'nav-item active' : 'nav-item'} onClick={() => navigate('reports')}><BarChart3 size={18} /><span>Reports</span></button><button className={activeView === 'favorites' ? 'nav-item active' : 'nav-item'} onClick={() => navigate('favorites')}><Bookmark size={18} /><span>Favorites</span>{favoritesCount > 0 && <span className="nav-count">{favoritesCount}</span>}</button>{isAdmin && <button className={activeView === 'settings' ? 'nav-item active' : 'nav-item'} onClick={() => navigate('settings')}><SlidersHorizontal size={18} /><span>Report Configuration</span></button>}</nav>
+        <nav><button className={activeView === 'home' ? 'nav-item active' : 'nav-item'} onClick={() => navigate('home')}><Home size={18} /><span>Home</span></button><button className={activeView === 'reports' ? 'nav-item active' : 'nav-item'} onClick={() => navigate('reports')}><BarChart3 size={18} /><span>Reports</span></button><button className={activeView === 'positions' ? 'nav-item active' : 'nav-item'} onClick={() => navigate('positions')}><Pin size={18} /><span>Positions</span>{positionPinsCount > 0 && <span className="nav-count">{positionPinsCount}</span>}</button>{isAdmin && <button className={activeView === 'settings' ? 'nav-item active' : 'nav-item'} onClick={() => navigate('settings')}><SlidersHorizontal size={18} /><span>Report Configuration</span></button>}</nav>
       </aside>
       <header className="topbar">
         <button className="icon-button menu-trigger" onClick={() => setMenuOpen(true)} aria-label="Open navigation" title="Open navigation"><Menu size={21} /></button>
@@ -681,7 +711,7 @@ export function App() {
         </div>
       </header>
 
-      {activeView === 'reports' ? <ReportsPage schools={schools} session={session} onManage={isAdmin ? () => navigate('settings') : undefined} onOpenRecord={openRecordByEmployeeNumber} onOpenPosition={openPositionByNumber} favoritesNav={favoritesReportNav} onFavoritesNavConsumed={() => setFavoritesReportNav(null)} /> : activeView === 'favorites' ? <FavoritesPage session={session} schools={schools} onOpenRecord={openRecordByEmployeeNumber} onOpenReport={handleOpenFavoriteReport} /> : activeView === 'settings' ? (isAdmin && session ? <SettingsPage session={session} schools={schools} /> : <section className="reports-page"><div className="notice error"><AlertCircle size={18} /><span>Access denied. Admin access is required.</span></div></section>) : <>
+      {activeView === 'reports' ? <ReportsPage schools={schools} session={session} onManage={isAdmin ? () => navigate('settings') : undefined} onOpenRecord={openRecordByEmployeeNumber} onOpenPosition={openPositionByNumber} /> : activeView === 'positions' ? <PositionsPage session={session} schools={schools} onOpenPosition={openPositionByNumber} /> : activeView === 'settings' ? (isAdmin && session ? <SettingsPage session={session} schools={schools} /> : <section className="reports-page"><div className="notice error"><AlertCircle size={18} /><span>Access denied. Admin access is required.</span></div></section>) : <>
       <section className="hero-band">
         <div>
           <p className="eyebrow">People directory</p>
@@ -744,7 +774,7 @@ export function App() {
         <button className="record-drawer-scrim" aria-label="Close drawer" onClick={closeRecord} />
         <aside className="record-drawer" role="dialog" aria-modal="true" aria-label={positionDetails || positionLoading || positionError ? 'Position details' : 'Employee record'}>
           {positionLoading ? <div className="empty-state"><span className="loader" />Loading position details</div> : positionError ? <div className="empty-state"><AlertCircle size={26} /><p>{positionError}</p></div> : positionDetails ? (
-            <PositionDetailView details={positionDetails} onClose={closeRecord} onOpenRecord={openRecordByEmployeeNumber} />
+            <PositionDetailView details={positionDetails} onClose={closeRecord} onOpenRecord={openRecordByEmployeeNumber} pinned={positionPinned} onTogglePin={() => void togglePositionPin()} />
           ) : recordLoading ? <div className="empty-state"><span className="loader" />Loading employee record</div> : recordError ? <div className="empty-state"><AlertCircle size={26} /><p>{recordError}</p></div> : personRecord ? <>
             <div className="record-layout-toolbar">
               <span className="record-layout-hint">Drag sections to reorder</span>
