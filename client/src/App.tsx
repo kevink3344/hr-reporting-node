@@ -8,7 +8,7 @@ import { SettingsPage } from './SettingsPage';
 import { UserSettingsPage } from './UserSettingsPage';
 import { DEFAULT_RECORD_LAYOUT, RECORD_SECTION_TITLES, arraysEqual, loadRecordLayout, resetRecordLayout, saveRecordLayout } from './recordLayout';
 import type { RecordSectionId } from './recordLayout';
-import { DEFAULT_SECTION_COLORS, SECTION_COLOR_OPTIONS, clearSectionColor, loadSectionColors, saveSectionColor } from './sectionColors';
+import { DEFAULT_SECTION_COLORS, SECTION_COLOR_OPTIONS, clearSectionColor, loadSectionColors, saveSectionColor, sectionHeaderColor } from './sectionColors';
 import { loadHomePage, saveHomePage } from './homePage';
 import type { HomePage } from './homePage';
 
@@ -108,6 +108,7 @@ function DraggableRecordSection({
   onDragEnd,
   onMoveUp,
   onMoveDown,
+  theme,
   children,
 }: {
   id: RecordSectionId;
@@ -127,6 +128,7 @@ function DraggableRecordSection({
   onDragEnd: () => void;
   onMoveUp: () => void;
   onMoveDown: () => void;
+  theme: 'light' | 'dark';
   children: React.ReactNode;
 }) {
   return <section
@@ -138,7 +140,7 @@ function DraggableRecordSection({
     onDragEnd={onDragEnd}
     aria-label={`${title} section, position ${index + 1} of ${total}, draggable`}
   >
-    <h4 draggable onDragStart={onDragStart} style={customColor ? { background: headerColor } : undefined}>
+    <h4 draggable onDragStart={onDragStart} style={customColor ? { background: sectionHeaderColor(headerColor, theme) } : undefined}>
       <GripVertical size={14} className="record-drag-handle" aria-hidden="true" />
       <span className="record-section-title">{title}</span>
       <span className="record-section-actions">
@@ -160,6 +162,7 @@ function EmployeeRecord({
   onMoveUp,
   onMoveDown,
   onOpenPosition,
+  theme,
 }: {
   record: PersonRecord;
   layout: RecordSectionId[];
@@ -169,6 +172,7 @@ function EmployeeRecord({
   onMoveUp: (index: number) => void;
   onMoveDown: (index: number) => void;
   onOpenPosition: (posNumber: string, organization: string) => void;
+  theme: 'light' | 'dark';
 }) {
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [dropIndex, setDropIndex] = useState<number | null>(null);
@@ -245,6 +249,7 @@ function EmployeeRecord({
       onDragEnd={handleDragEnd}
       onMoveUp={() => onMoveUp(index)}
       onMoveDown={() => onMoveDown(index)}
+      theme={theme}
     >{renderers[id]}</DraggableRecordSection>)}
   </div>;
 }
@@ -916,7 +921,7 @@ export function App() {
             </div>
             {layoutNotice && <div className="notice success" role="status" aria-live="polite">{layoutNotice}</div>}
             <div aria-live="polite" className="sr-only">{layoutNotice}</div>
-            <EmployeeRecord record={personRecord} layout={recordLayout} userId={session?.user.id ?? null} onClose={closeRecord} onReorder={reorderRecordSection} onMoveUp={moveRecordSectionUp} onMoveDown={moveRecordSectionDown} onOpenPosition={openPositionByNumber} />
+            <EmployeeRecord record={personRecord} layout={recordLayout} userId={session?.user.id ?? null} onClose={closeRecord} onReorder={reorderRecordSection} onMoveUp={moveRecordSectionUp} onMoveDown={moveRecordSectionDown} onOpenPosition={openPositionByNumber} theme={theme} />
           </> : <div className="detail-placeholder"><Users size={28} /><h3>Select a person</h3><p>Choose a record from the directory to inspect the complete employee report.</p></div>}
         </aside>
       </>}

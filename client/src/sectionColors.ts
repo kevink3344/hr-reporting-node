@@ -59,3 +59,22 @@ export function clearSectionColor(userId: string | null, sectionId: RecordSectio
   delete current[sectionId];
   window.localStorage.setItem(storageKey(userId), JSON.stringify(current));
 }
+// Darken a pastel hex color for use on the dark theme so custom section headers
+// stay readable instead of glowing bright. Only handles #rgb / #rrggbb.
+export function darkenColor(hex: string, ratio = 0.55): string {
+  const raw = hex.replace('#', '');
+  const full = raw.length === 3 ? raw.split('').map((c) => c + c).join('') : raw;
+  const value = Number.parseInt(full, 16);
+  if (Number.isNaN(value) || full.length !== 6) return hex;
+  const channel = (shift: number) => {
+    const c = (value >> shift) & 0xff;
+    const darkened = Math.round(c * ratio);
+    return darkened.toString(16).padStart(2, '0');
+  };
+  return `#${channel(16)}${channel(8)}${channel(0)}`;
+}
+
+// Resolve the actual background to apply for a section header in the current theme.
+export function sectionHeaderColor(hex: string, theme: 'light' | 'dark'): string {
+  return theme === 'dark' ? darkenColor(hex, 0.5) : hex;
+}
