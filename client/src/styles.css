@@ -401,6 +401,7 @@ h1, h2, h3, p { margin-top: 0; } h1 { margin-bottom: 0; font-size: 17px; } h2 { 
 .positions-card-meta { display: flex; flex-wrap: wrap; gap: 10px; color: #8c857a; font-size: 12px; margin-top: 6px; }
 .positions-pagination { display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 18px; }
 @media (max-width: 680px) { .positions-table-wrap { display: none; } .positions-cards { display: block; } .positions-header { flex-direction: column; align-items: start; } }
+.nav-count { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; background: #e7efe9; color: #2e5e56; font-size: 11px; font-weight: 600; line-height: 1; }
 [data-theme="dark"] .nav-count { background: #24332e; color: #7ecbb5; }
 [data-theme="dark"] .positions-card { border-color: #3a332a; background: #1c1813; }
 @media (max-width: 680px) { .highlight-rule select, .highlight-rule input, .highlight-condition select { flex: 1 1 100%; } .highlight-rule-head, .highlight-condition { align-items: stretch; } }
@@ -471,11 +472,11 @@ h1, h2, h3, p { margin-top: 0; } h1 { margin-bottom: 0; font-size: 17px; } h2 { 
   gap: 2px;
 }
 .system-banner-title {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 700;
 }
 .system-banner-body {
-  font-size: 12.5px;
+  font-size: 15px;
   line-height: 1.5;
   color: #56746c;
   white-space: pre-wrap;
