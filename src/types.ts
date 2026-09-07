@@ -293,3 +293,14 @@ export type PositionPin = {
   employeeNumber: string | null;
   createdAt: string;
 };
+
+export type PositionComment = {
+  id: string;
+  posNumber: string;
+  organization: string;
+  authorId: string;
+  authorName: string;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+};

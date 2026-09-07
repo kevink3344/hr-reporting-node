@@ -323,7 +323,8 @@ export const mysqlRepositories: Repositories = {
   reportViews: fixtureRepositories.reportViews,
   reportViewInvites: fixtureRepositories.reportViewInvites,
   reportViewComments: fixtureRepositories.reportViewComments,
-  positionPins: fixtureRepositories.positionPins
+  positionPins: fixtureRepositories.positionPins,
+  positionComments: fixtureRepositories.positionComments
 };
 
 function buildRecord(employee: EmployeeRow, school: SchoolRow | undefined): PersonRecord {

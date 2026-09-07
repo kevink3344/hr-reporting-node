@@ -4,6 +4,7 @@ import type {
   GenericReportRun,
   OpenPositionRow,
   Person,
+  PositionComment,
   PositionPin,
   PersonRecord,
   PositionDetails,
@@ -16,6 +17,7 @@ import type {
   ViewDefinition
 } from '../types.js';
 import type {
+  PositionCommentInput,
   PositionPinInput,
   Repositories,
   ReportDefinitionInput,
@@ -472,7 +474,8 @@ export const fixtureRepositories: Repositories = {
   reportViews: buildFixtureReportViews(),
   reportViewInvites: buildFixtureReportViewInvites(),
   reportViewComments: buildFixtureReportViewComments(),
-  positionPins: buildFixturePositionPins()
+  positionPins: buildFixturePositionPins(),
+  positionComments: buildFixturePositionComments()
 };
 
 function buildFixtureReportViews(): Repositories['reportViews'] {
@@ -731,6 +734,43 @@ function buildFixturePositionPins(): Repositories['positionPins'] {
         const pin = fixturePositionPins.find((candidate) => candidate.userId === userId && candidate.posNumber === posNumber && candidate.organization === organization);
         return { posNumber, organization, pinned: !!pin, pinId: pin?.id ?? null };
       });
+    }
+  };
+}
+
+const fixturePositionComments: PositionComment[] = [];
+
+function buildFixturePositionComments(): Repositories['positionComments'] {
+  return {
+    async list(posNumber, organization) {
+      return fixturePositionComments
+        .filter((comment) => comment.posNumber === posNumber && comment.organization === organization)
+        .slice()
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+        .map((comment) => ({ ...comment }));
+    },
+    async create(input: PositionCommentInput) {
+      const body = input.body.trim();
+      if (!body || body.length > 2000) throw Object.assign(new Error('COMMENT_BODY_REQUIRED'), { code: 'COMMENT_BODY_REQUIRED' });
+      const now = nowIso();
+      const comment: PositionComment = {
+        id: newId(),
+        posNumber: input.posNumber.trim(),
+        organization: input.organization.trim(),
+        authorId: input.authorId,
+        authorName: input.authorName,
+        body,
+        createdAt: now,
+        updatedAt: now
+      };
+      fixturePositionComments.push(comment);
+      return { ...comment };
+    },
+    async delete(commentId, authorId) {
+      const idx = fixturePositionComments.findIndex((comment) => comment.id === commentId && comment.authorId === authorId);
+      if (idx === -1) return false;
+      fixturePositionComments.splice(idx, 1);
+      return true;
     }
   };
 }

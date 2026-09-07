@@ -671,6 +671,25 @@ CREATE INDEX IF NOT EXISTS idx_position_pins_user ON position_pins (user_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_position_pins_unique ON position_pins (user_id, pos_number, organization);
 
 -- =====================================================================
+-- position_comments — shared notes attached to a position
+--   Many-to-many: any number of notes per position.
+--   Keyed by pos_number + organization (a position is not globally unique).
+--   Only the author (author_id == user) may delete a note.
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS position_comments (
+  id            TEXT PRIMARY KEY,
+  pos_number    TEXT NOT NULL,
+  organization  TEXT NOT NULL,
+  author_id     TEXT NOT NULL,
+  author_name   TEXT NOT NULL,
+  body          TEXT NOT NULL,
+  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_position_comments_pos ON position_comments (pos_number, organization);
+CREATE INDEX IF NOT EXISTS idx_position_comments_author ON position_comments (author_id);
+
+-- =====================================================================
 -- s_n_a — school & age / staffing summary projection
 -- =====================================================================
 CREATE TABLE IF NOT EXISTS s_n_a (

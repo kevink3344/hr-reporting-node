@@ -2,6 +2,7 @@ import type {
   GenericReportRun,
   OpenPositionRow,
   Person,
+  PositionComment,
   PositionPin,
   PersonRecord,
   PositionDetails,
@@ -193,6 +194,20 @@ export interface PositionPinsRepository {
   check(userId: string, keys: { posNumber: string; organization: string }[]): Promise<PositionPinCheck[]>;
 }
 
+export type PositionCommentInput = {
+  posNumber: string;
+  organization: string;
+  authorId: string;
+  authorName: string;
+  body: string;
+};
+
+export interface PositionCommentsRepository {
+  list(posNumber: string, organization: string): Promise<PositionComment[]>;
+  create(input: PositionCommentInput): Promise<PositionComment>;
+  delete(commentId: string, authorId: string): Promise<boolean>;
+}
+
 export type Repositories = {
   people: PeopleRepository;
   schools: SchoolsRepository;
@@ -205,4 +220,5 @@ export type Repositories = {
   reportViewInvites: ReportViewInvitesRepository;
   reportViewComments: ReportViewCommentsRepository;
   positionPins: PositionPinsRepository;
+  positionComments: PositionCommentsRepository;
 };

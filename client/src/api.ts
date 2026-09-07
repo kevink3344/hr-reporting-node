@@ -3,6 +3,7 @@ import type {
   LoginSession,
   PersonPage,
   PersonRecord,
+  PositionComment,
   PositionDetails,
   PositionPin,
   PositionPinCheck,
@@ -339,6 +340,38 @@ export function deletePositionPin(session: LoginSession, id: string): Promise<vo
 export function deletePositionPinByKey(session: LoginSession, posNumber: string, organization: string): Promise<void> {
   const params = new URLSearchParams({ organization });
   return request<void>(`/api/pins/by-key/${encodeURIComponent(posNumber)}?${params.toString()}`, {
+    method: 'DELETE',
+    headers: viewHeaders(session)
+  });
+}
+
+// ---- Position Notes (comments on a position) ----
+
+export function getPositionComments(
+  session: LoginSession | null | undefined,
+  posNumber: string,
+  organization: string
+): Promise<PositionComment[]> {
+  const query = new URLSearchParams({ organization });
+  return request<PositionComment[]>(`/api/positions/${encodeURIComponent(posNumber)}/comments?${query.toString()}`, {
+    headers: viewHeaders(session)
+  });
+}
+
+export function createPositionComment(
+  session: LoginSession,
+  posNumber: string,
+  input: { organization: string; body: string }
+): Promise<PositionComment> {
+  return request<PositionComment>(`/api/positions/${encodeURIComponent(posNumber)}/comments`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...viewHeaders(session) },
+    body: JSON.stringify(input)
+  });
+}
+
+export function deletePositionComment(session: LoginSession, posNumber: string, commentId: string): Promise<void> {
+  return request<void>(`/api/positions/${encodeURIComponent(posNumber)}/comments/${encodeURIComponent(commentId)}`, {
     method: 'DELETE',
     headers: viewHeaders(session)
   });

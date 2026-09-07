@@ -275,3 +275,14 @@ export type PositionPinCheck = {
   pinned: boolean;
   pinId: string | null;
 };
+
+export type PositionComment = {
+  id: string;
+  posNumber: string;
+  organization: string;
+  authorId: string;
+  authorName: string;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+};

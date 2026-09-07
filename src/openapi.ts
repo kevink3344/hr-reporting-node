@@ -451,6 +451,38 @@ export const openApiDocument = {
         responses: { '204': { description: 'Position pin removed' }, '404': { description: 'Position pin not found' } }
       }
     },
+    '/positions/{posNumber}/comments': {
+      get: {
+        tags: ['Positions'],
+        operationId: 'listPositionComments',
+        parameters: [
+          { name: 'posNumber', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'organization', in: 'query', required: true, schema: { type: 'string' } }
+        ],
+        responses: { '200': { description: 'Position notes', content: { 'application/json': { schema: { type: 'array', items: { $ref: '#/components/schemas/PositionComment' } } } } } }
+      },
+      post: {
+        tags: ['Positions'],
+        operationId: 'createPositionComment',
+        parameters: [{ name: 'posNumber', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/PositionCommentInput' } } } },
+        responses: {
+          '201': { description: 'Position note created', content: { 'application/json': { schema: { $ref: '#/components/schemas/PositionComment' } } } },
+          '400': { description: 'Validation error' }
+        }
+      }
+    },
+    '/positions/{posNumber}/comments/{commentId}': {
+      delete: {
+        tags: ['Positions'],
+        operationId: 'deletePositionComment',
+        parameters: [
+          { name: 'posNumber', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'commentId', in: 'path', required: true, schema: { type: 'string' } }
+        ],
+        responses: { '204': { description: 'Position note deleted' }, '404': { description: 'Position note not found' } }
+      }
+    },
     '/report-views/{id}/comments/{commentId}': {
       patch: {
         tags: ['Reports'],
@@ -860,6 +892,28 @@ export const openApiDocument = {
           organization: { type: 'string' },
           pinned: { type: 'boolean' },
           pinId: { type: 'string', nullable: true }
+        }
+      },
+      PositionComment: {
+        type: 'object',
+        required: ['id', 'posNumber', 'organization', 'authorId', 'authorName', 'body'],
+        properties: {
+          id: { type: 'string' },
+          posNumber: { type: 'string' },
+          organization: { type: 'string' },
+          authorId: { type: 'string' },
+          authorName: { type: 'string' },
+          body: { type: 'string' },
+          createdAt: { type: 'string' },
+          updatedAt: { type: 'string' }
+        }
+      },
+      PositionCommentInput: {
+        type: 'object',
+        required: ['organization', 'body'],
+        properties: {
+          organization: { type: 'string', maxLength: 200 },
+          body: { type: 'string', maxLength: 2000 }
         }
       },
       ReportViewCommentInput: {

@@ -4,6 +4,7 @@ import type {
   GenericReportRun,
   OpenPositionRow,
   Person,
+  PositionComment,
   PositionPin,
   PersonRecord,
   PositionDetails,
@@ -16,6 +17,7 @@ import type {
   ViewDefinition
 } from '../types.js';
 import type {
+  PositionCommentInput,
   PositionPinInput,
   Repositories,
   ReportDefinitionInput,
@@ -989,6 +991,34 @@ export const tursoRepositories: Repositories = {
         return { posNumber: k.posNumber, organization: k.organization, pinned: !!row, pinId: row ? String(row.id) : null };
       });
     }
+  },
+  positionComments: {
+    async list(posNumber, organization) {
+      const rows = await query<PositionCommentRow>(
+        'SELECT * FROM position_comments WHERE pos_number = ? AND organization = ? ORDER BY created_at ASC',
+        [posNumber, organization]
+      );
+      return rows.map(toPositionComment);
+    },
+    async create(input: PositionCommentInput) {
+      const body = input.body.trim();
+      if (!body || body.length > 2000) throw codedError('COMMENT_BODY_REQUIRED');
+      const id = newId();
+      const now = nowIso();
+      await query(
+        'INSERT INTO position_comments (id, pos_number, organization, author_id, author_name, body, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        [id, input.posNumber.trim(), input.organization.trim(), input.authorId, input.authorName, body, now, now]
+      );
+      const created = await query<PositionCommentRow>('SELECT * FROM position_comments WHERE id = ? LIMIT 1', [id]);
+      return toPositionComment(created[0]);
+    },
+    async delete(commentId, authorId) {
+      const rows = await query<PositionCommentRow>('SELECT * FROM position_comments WHERE id = ? LIMIT 1', [commentId]);
+      if (!rows[0]) return false;
+      if (rows[0].author_id !== authorId) throw codedError('FORBIDDEN');
+      await query('DELETE FROM position_comments WHERE id = ?', [commentId]);
+      return true;
+    }
   }
 };
 
@@ -1112,6 +1142,17 @@ type PositionPinRow = {
   created_at: string | null;
 };
 
+type PositionCommentRow = {
+  id: string;
+  pos_number: string | null;
+  organization: string | null;
+  author_id: string;
+  author_name: string;
+  body: string;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
 function toPositionPin(row: PositionPinRow): PositionPin {
   return {
     id: String(row.id),
@@ -1122,6 +1163,19 @@ function toPositionPin(row: PositionPinRow): PositionPin {
     incumbentName: row.incumbent_name ? String(row.incumbent_name) : null,
     employeeNumber: row.employee_number ? String(row.employee_number) : null,
     createdAt: String(row.created_at ?? '')
+  };
+}
+
+function toPositionComment(row: PositionCommentRow): PositionComment {
+  return {
+    id: String(row.id),
+    posNumber: String(row.pos_number ?? ''),
+    organization: String(row.organization ?? ''),
+    authorId: String(row.author_id),
+    authorName: String(row.author_name),
+    body: String(row.body),
+    createdAt: String(row.created_at ?? ''),
+    updatedAt: String(row.updated_at ?? '')
   };
 }
 

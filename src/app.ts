@@ -158,6 +158,11 @@ const positionPinInputSchema = z.object({
   employeeNumber: z.string().trim().max(32).nullable().optional()
 });
 
+const positionCommentInputSchema = z.object({
+  organization: z.string().trim().min(1).max(200),
+  body: z.string().trim().min(1).max(2000)
+});
+
 export function createApp(repositories: Repositories = fixtureRepositories) {
   const application = express();
   application.use(express.json());
@@ -899,6 +904,54 @@ export function createApp(repositories: Repositories = fixtureRepositories) {
       if (!removed) { response.status(404).json({ error: 'PIN_NOT_FOUND' }); return; }
       response.status(204).end();
     } catch (error) { next(error); }
+  });
+
+  // ---- Position Notes (comments on a position) ----
+  application.get('/api/positions/:posNumber/comments', async (request, response, next) => {
+    try {
+      const posNumber = routeId(request.params.posNumber);
+      const organization = typeof request.query.organization === 'string' ? request.query.organization.trim() : '';
+      const comments = await repositories.positionComments.list(posNumber, organization);
+      response.json(comments);
+    } catch (error) {
+      const mapped = repoErrorToStatus(error);
+      if (mapped.status !== 500) { response.status(mapped.status).json(mapped.body); return; }
+      next(error);
+    }
+  });
+
+  application.post('/api/positions/:posNumber/comments', async (request, response, next) => {
+    try {
+      const posNumber = routeId(request.params.posNumber);
+      const input = positionCommentInputSchema.parse(request.body);
+      // The path posNumber is the source of truth for which position gets the note.
+      const created = await repositories.positionComments.create({
+        posNumber,
+        organization: input.organization,
+        authorId: callerId(request),
+        authorName: callerName(request),
+        body: input.body
+      });
+      response.status(201).json(created);
+    } catch (error) {
+      const mapped = repoErrorToStatus(error);
+      if (mapped.status !== 500) { response.status(mapped.status).json(mapped.body); return; }
+      next(error);
+    }
+  });
+
+  application.delete('/api/positions/:posNumber/comments/:commentId', async (request, response, next) => {
+    try {
+      const posNumber = routeId(request.params.posNumber);
+      const commentId = routeId(request.params.commentId);
+      const removed = await repositories.positionComments.delete(commentId, callerId(request));
+      if (!removed) { response.status(404).json({ error: 'COMMENT_NOT_FOUND' }); return; }
+      response.status(204).end();
+    } catch (error) {
+      const mapped = repoErrorToStatus(error);
+      if (mapped.status !== 500) { response.status(mapped.status).json(mapped.body); return; }
+      next(error);
+    }
   });
 
   application.get('/api/docs.json', (_request, response) => {
