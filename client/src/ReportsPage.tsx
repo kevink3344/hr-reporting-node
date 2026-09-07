@@ -12,6 +12,7 @@ import {
   FileDown,
   FileSpreadsheet,
   FileText,
+  FileType,
   MessageSquare,
   Search,
   Share2,
@@ -453,7 +454,7 @@ function GenericReportView({
         <span className="report-view-meta">{displayRows.length} of {result.rows.length} rows{result.truncated ? ' (truncated)' : ''}</span>
         <button className="export-button export-button--icon" onClick={() => void exportGenericReport(exportRun)} aria-label="Export to Excel" title="Export to Excel"><FileSpreadsheet size={17} /></button>
         <button className="export-button export-button--secondary export-button--icon" onClick={() => void exportGenericReportToCsv(exportRun)} aria-label="Export to CSV" title="Export to CSV"><FileDown size={17} /></button>
-        <button className="export-button export-button--secondary export-button--icon" onClick={() => void exportGenericReportToPdf(exportRun)} aria-label="Export to PDF" title="Export to PDF"><FileText size={17} /></button>
+        <button className="export-button export-button--secondary export-button--icon" onClick={() => void exportGenericReportToPdf(exportRun)} aria-label="Export to PDF" title="Export to PDF"><FileType size={17} /></button>
       </div>
       <div className="report-view-title"><p className="eyebrow">Report{result.report.sectionTitle ? ` — ${result.report.sectionTitle}` : ''}</p><h2>{result.report.title} <span className="report-scope">{result.organization}</span></h2></div>
     </div>
