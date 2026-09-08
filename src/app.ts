@@ -21,6 +21,7 @@ import { openApiDocument } from './openapi.js';
 import { viewDefinitionSchema } from './report-views.js';
 import { reportHighlightRulesSchema } from './report-highlight.js';
 import { validateSubreportSql } from './reports-sql.js';
+import type { School } from './types.js';
 
 const querySchema = z.object({
   search: z.string().trim().optional(),
@@ -102,8 +103,85 @@ function callerEmail(request: express.Request): string | undefined {
   return request.header('x-user-email')?.trim() || undefined;
 }
 
+/**
+ * Fixture auth (users.json / schools.json) grants synthetic school ids like
+ * `school-001`, while the live data sources (turso/mysql) identify schools by
+ * their real `school_no` (e.g. `0501`). To make school scoping work across any
+ * data source, translate the granted fixture ids to the active repository's
+ * school ids by matching on school name (the only field stable everywhere).
+ * The fixture id -> name map is read once; the live id list is resolved lazily
+ * so login still works while a live DB is warming up.
+ */
+let fixtureIdToName: Record<string, string> | null = null;
+
+async function getFixtureIdToName(): Promise<Record<string, string>> {
+  if (!fixtureIdToName) {
+    try {
+      const { readFile } = await import('node:fs/promises');
+      const { resolve } = await import('node:path');
+      const schools = JSON.parse(await readFile(resolve(process.cwd(), 'docs', 'data', 'schools.json'), 'utf8')) as School[];
+      fixtureIdToName = Object.fromEntries(schools.map((school) => [school.id, school.name]));
+    } catch {
+      // If the fixture schools file is unavailable, keep an empty map so the
+      // caller's ids pass through unchanged rather than being dropped.
+      fixtureIdToName = {};
+    }
+  }
+  return fixtureIdToName;
+}
+
+/**
+ * Resolve a single granted id to the id understood by `repositories`. It
+ * accepts either a fixture id ("school-002") or a real school_no ("0501").
+ */
+function resolveGrantedSchoolId(
+  grantedId: string,
+  fixtureToName: Record<string, string>,
+  liveById: Map<string, School>,
+  liveByName: Map<string, School>
+): string {
+  if (liveById.has(grantedId)) return grantedId;
+  const name = fixtureToName[grantedId];
+  const live = name ? liveByName.get(name) : undefined;
+  return live?.id ?? grantedId;
+}
+
+async function reconcileSchoolIds(repositories: Repositories, grantedIds: string[]): Promise<string[]> {
+  const fixtureToName = await getFixtureIdToName();
+  const liveSchools = await repositories.schools.list().catch(() => []);
+  const liveById = new Map(liveSchools.map((school) => [school.id, school]));
+  const liveByName = new Map(liveSchools.map((school) => [school.name, school]));
+  return grantedIds.map((id) => resolveGrantedSchoolId(id, fixtureToName, liveById, liveByName));
+}
+
+// School scoping for non-admins: the client forwards the signed-in user's
+// allowed school ids and view-all flag. When a scope is present and the user
+// cannot view all schools, list/filter endpoints return only those schools.
+function callerSchoolIds(request: express.Request): string[] {
+  const header = request.header('x-user-school-ids') ?? '';
+  return header.split(',').map((id) => id.trim()).filter(Boolean);
+}
+
+function hasSchoolScope(request: express.Request): boolean {
+  return request.header('x-user-school-ids') != null;
+}
+
+function canViewAllSchools(request: express.Request): boolean {
+  return request.header('x-user-view-all') === '1' || callerRoles(request).includes('hr_admin');
+}
+
+/** True when an org id is visible to the caller (any admin or unscoped/anon request sees everything). */
+function orgIsVisible(request: express.Request, organizationId: string): boolean {
+  if (canViewAllSchools(request) || !hasSchoolScope(request)) return true;
+  return callerSchoolIds(request).includes(organizationId);
+}
+
 function isAdmin(request: express.Request): boolean {
   return callerRoles(request).includes('hr_admin');
+}
+
+function isDataTeam(request: express.Request): boolean {
+  return callerRoles(request).includes('data_team');
 }
 
 function requireAdmin(request: express.Request, response: express.Response, next: express.NextFunction) {
@@ -112,6 +190,25 @@ function requireAdmin(request: express.Request, response: express.Response, next
     return;
   }
   next();
+}
+
+function requireDataTeam(request: express.Request, response: express.Response, next: express.NextFunction) {
+  if (!isDataTeam(request) && !isAdmin(request)) {
+    response.status(403).json({ error: 'FORBIDDEN' });
+    return;
+  }
+  next();
+}
+
+/**
+ * Feature gate for the Future Positions workflow. Returns the flag value so
+ * handlers can also surface it to the client. When off, all future-positions
+ * routes reject with FEATURE_DISABLED.
+ */
+async function requireFuturePositionsEnabled(repositories: Repositories): Promise<{ enabled: boolean } | null> {
+  const flag = await repositories.featureFlags.get('future_positions');
+  if (!flag?.enabled) return null;
+  return { enabled: true };
 }
 
 function stripSqlForReader<T extends { sqlQuery?: string; subreportQuery?: string }>(report: T, admin: boolean): T {
@@ -147,13 +244,19 @@ function repoErrorToStatus(error: unknown): { status: number; body: { error: str
     case 'INVITE_ALREADY_EXISTS':
     case 'VERSION_CONFLICT':
     case 'PIN_EXISTS':
+    case 'FUTURE_POSITION_EXISTS':
+    case 'FUTURE_POSITION_LOCKED':
+    case 'FUTURE_POSITION_NOT_LOCKED':
       return { status: 409, body: { error: code } };
     case 'FORBIDDEN':
+      return { status: 403, body: { error: code } };
+    case 'FEATURE_DISABLED':
       return { status: 403, body: { error: code } };
     case 'VIEW_NOT_FOUND':
     case 'INVITE_NOT_FOUND':
     case 'COMMENT_NOT_FOUND':
     case 'MESSAGE_NOT_FOUND':
+    case 'FUTURE_POSITION_NOT_FOUND':
       return { status: 404, body: { error: code } };
     case 'MESSAGE_REQUIRED':
     case 'MESSAGE_TOO_LONG':
@@ -187,6 +290,38 @@ const systemMessageSchema = z.object({
 
 const systemMessagePatchSchema = systemMessageSchema.partial();
 
+const futurePositionSchema = z.object({
+  posNumber: z.string().trim().min(1).max(64),
+  posName: z.string().trim().min(1).max(255),
+  organization: z.string().trim().min(1).max(255),
+  accountNumber: z.string().trim().max(255).nullable().optional(),
+  incumbentName: z.string().trim().max(255).nullable().optional(),
+  employeeNumber: z.string().trim().max(64).nullable().optional(),
+  positionType: z.enum(['vacant', 'replacement', 'new']).optional(),
+  hireDate: z.string().trim().max(32).nullable().optional(),
+  classroomAssigned: z.string().trim().max(255).nullable().optional(),
+  contractType: z.string().trim().max(64).nullable().optional(),
+  contractStartDate: z.string().trim().max(32).nullable().optional(),
+  contractEndDate: z.string().trim().max(32).nullable().optional(),
+  letterNeeded: z.enum(['Change', 'Rehire', 'Other']).nullable().optional(),
+  notes: z.string().trim().max(4000).nullable().optional()
+});
+
+// POST body omits posNumber (it comes from the URL path /api/positions/:posNumber/future).
+const futurePositionCreateSchema = futurePositionSchema.omit({ posNumber: true });
+
+const futurePositionPatchSchema = futurePositionSchema.partial().omit({ posNumber: true, organization: true });
+
+const futurePositionListQuerySchema = z.object({
+  posNumber: z.string().trim().optional(),
+  organization: z.string().trim().optional(),
+  status: z.enum(['pending', 'locked', 'completed']).optional()
+});
+
+const featureFlagPatchSchema = z.object({
+  enabled: z.boolean()
+});
+
 export function createApp(
   repositories: Repositories = fixtureRepositories,
   options?: { serveClient?: boolean }
@@ -202,7 +337,13 @@ export function createApp(
         response.status(401).json({ error: 'INVALID_CREDENTIALS' });
         return;
       }
-      response.json(session);
+      // Translate fixture school ids (school-001) to the active repository's
+      // ids (e.g. real school_no) so scoping works against turso/mysql.
+      const schoolIds = await reconcileSchoolIds(repositories, session.user.schoolIds);
+      response.json({
+        ...session,
+        user: { ...session.user, schoolIds }
+      });
     } catch (error) {
       next(error);
     }
@@ -221,7 +362,9 @@ export function createApp(
       const people = (await repositories.people.list()).filter((person) => {
         const matchesSearch = !search || [person.fullName, person.employeeNumber, person.organization]
           .some((value) => value.toLowerCase().includes(search));
-        return matchesSearch && (!query.schoolId || person.organizationId === query.schoolId);
+        const matchesSchool = !query.schoolId || person.organizationId === query.schoolId;
+        // Scoping only applies when the client forwards school-permission headers.
+        return matchesSearch && matchesSchool && orgIsVisible(request, person.organizationId);
       });
       const start = (query.page - 1) * query.pageSize;
       response.json({
@@ -261,9 +404,17 @@ export function createApp(
     }
   });
 
-  application.get('/api/schools', async (_request, response, next) => {
+  application.get('/api/schools', async (request, response, next) => {
     try {
-      response.json(await repositories.schools.list());
+      const schools = await repositories.schools.list();
+      // Scoping only applies when the client forwards the signed-in user's
+      // school permission headers. Anonymous / unscoped requests (and admins
+      // who can view all schools) see the full list. Restricted users see only
+      // the schools granted via x-user-school-ids.
+      const visible = !hasSchoolScope(request) || canViewAllSchools(request)
+        ? schools
+        : schools.filter((school) => callerSchoolIds(request).includes(school.id));
+      response.json(visible);
     } catch (error) {
       next(error);
     }
@@ -1045,6 +1196,149 @@ export function createApp(
       const removed = await repositories.systemMessages.delete(id);
       if (!removed) { response.status(404).json({ error: 'MESSAGE_NOT_FOUND' }); return; }
       response.status(204).end();
+    } catch (error) {
+      const mapped = repoErrorToStatus(error);
+      if (mapped.status !== 500) { response.status(mapped.status).json(mapped.body); return; }
+      next(error);
+    }
+  });
+
+  // ---- Feature flags (Settings toggle) ----
+  // Any authenticated user reads the toggle so the client can hide the UI;
+  // only an admin may change it.
+  application.get('/api/feature-flags', async (_request, response, next) => {
+    try {
+      const flag = await repositories.featureFlags.get('future_positions');
+      response.json({ key: 'future_positions', enabled: flag?.enabled ?? false });
+    } catch (error) {
+      const mapped = repoErrorToStatus(error);
+      if (mapped.status !== 500) { response.status(mapped.status).json(mapped.body); return; }
+      next(error);
+    }
+  });
+
+  application.patch('/api/feature-flags/future_positions', requireAdmin, async (request, response, next) => {
+    try {
+      const patch = featureFlagPatchSchema.parse(request.body);
+      const flag = await repositories.featureFlags.set('future_positions', patch.enabled, callerId(request));
+      response.json(flag);
+    } catch (error) {
+      const mapped = repoErrorToStatus(error);
+      if (mapped.status !== 500) { response.status(mapped.status).json(mapped.body); return; }
+      next(error);
+    }
+  });
+
+  // ---- Future Positions (staged new incumbents) ----
+  // Every route is gated by the future_positions flag. Reads are staff+;
+  // writes to "complete" are data_team / hr_admin.
+  application.get('/api/future-positions', requireDataTeam, async (request, response, next) => {
+    try {
+      const gate = await requireFuturePositionsEnabled(repositories);
+      if (!gate) { response.status(403).json({ error: 'FEATURE_DISABLED' }); return; }
+      await repositories.futurePositions.autoLockPending();
+      const query = futurePositionListQuerySchema.parse(request.query);
+      const items = await repositories.futurePositions.list({
+        posNumber: query.posNumber,
+        organization: query.organization,
+        status: query.status
+      });
+      response.json(items);
+    } catch (error) {
+      const mapped = repoErrorToStatus(error);
+      if (mapped.status !== 500) { response.status(mapped.status).json(mapped.body); return; }
+      next(error);
+    }
+  });
+
+  application.get('/api/positions/:posNumber/future', async (request, response, next) => {
+    try {
+      const gate = await requireFuturePositionsEnabled(repositories);
+      if (!gate) { response.status(403).json({ error: 'FEATURE_DISABLED' }); return; }
+      await repositories.futurePositions.autoLockPending();
+      const posNumber = routeId(request.params.posNumber);
+      const organization = typeof request.query.organization === 'string' ? request.query.organization.trim() : '';
+      const item = await repositories.futurePositions.getForPosition(posNumber, organization);
+      response.json(item);
+    } catch (error) {
+      const mapped = repoErrorToStatus(error);
+      if (mapped.status !== 500) { response.status(mapped.status).json(mapped.body); return; }
+      next(error);
+    }
+  });
+
+  application.post('/api/positions/:posNumber/future', async (request, response, next) => {
+    try {
+      const gate = await requireFuturePositionsEnabled(repositories);
+      if (!gate) { response.status(403).json({ error: 'FEATURE_DISABLED' }); return; }
+      await repositories.futurePositions.autoLockPending();
+      const posNumber = routeId(request.params.posNumber);
+      const input = futurePositionCreateSchema.parse(request.body);
+      const created = await repositories.futurePositions.create({
+        posNumber,
+        posName: input.posName,
+        organization: input.organization,
+        accountNumber: input.accountNumber ?? null,
+        incumbentName: input.incumbentName ?? null,
+        employeeNumber: input.employeeNumber ?? null,
+        positionType: input.positionType,
+        hireDate: input.hireDate ?? null,
+        classroomAssigned: input.classroomAssigned ?? null,
+        contractType: input.contractType ?? null,
+        contractStartDate: input.contractStartDate ?? null,
+        contractEndDate: input.contractEndDate ?? null,
+        letterNeeded: input.letterNeeded ?? null,
+        notes: input.notes ?? null,
+        submittedBy: callerId(request),
+        submittedByName: callerName(request)
+      });
+      response.status(201).json(created);
+    } catch (error) {
+      const mapped = repoErrorToStatus(error);
+      if (mapped.status !== 500) { response.status(mapped.status).json(mapped.body); return; }
+      next(error);
+    }
+  });
+
+  application.patch('/api/future-positions/:id', async (request, response, next) => {
+    try {
+      const gate = await requireFuturePositionsEnabled(repositories);
+      if (!gate) { response.status(403).json({ error: 'FEATURE_DISABLED' }); return; }
+      const id = routeId(request.params.id);
+      const patch = futurePositionPatchSchema.parse(request.body);
+      const updated = await repositories.futurePositions.update(id, patch, callerId(request));
+      if (!updated) { response.status(404).json({ error: 'FUTURE_POSITION_NOT_FOUND' }); return; }
+      response.json(updated);
+    } catch (error) {
+      const mapped = repoErrorToStatus(error);
+      if (mapped.status !== 500) { response.status(mapped.status).json(mapped.body); return; }
+      next(error);
+    }
+  });
+
+  application.post('/api/future-positions/:id/send-now', async (request, response, next) => {
+    try {
+      const gate = await requireFuturePositionsEnabled(repositories);
+      if (!gate) { response.status(403).json({ error: 'FEATURE_DISABLED' }); return; }
+      const id = routeId(request.params.id);
+      const updated = await repositories.futurePositions.sendNow(id, callerId(request));
+      if (!updated) { response.status(404).json({ error: 'FUTURE_POSITION_NOT_FOUND' }); return; }
+      response.json(updated);
+    } catch (error) {
+      const mapped = repoErrorToStatus(error);
+      if (mapped.status !== 500) { response.status(mapped.status).json(mapped.body); return; }
+      next(error);
+    }
+  });
+
+  application.post('/api/future-positions/:id/complete', requireDataTeam, async (request, response, next) => {
+    try {
+      const gate = await requireFuturePositionsEnabled(repositories);
+      if (!gate) { response.status(403).json({ error: 'FEATURE_DISABLED' }); return; }
+      const id = routeId(request.params.id);
+      const updated = await repositories.futurePositions.complete(id, callerId(request));
+      if (!updated) { response.status(404).json({ error: 'FUTURE_POSITION_NOT_FOUND' }); return; }
+      response.json(updated);
     } catch (error) {
       const mapped = repoErrorToStatus(error);
       if (mapped.status !== 500) { response.status(mapped.status).json(mapped.body); return; }

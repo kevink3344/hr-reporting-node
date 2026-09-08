@@ -356,3 +356,51 @@ export type PositionComment = {
   createdAt: string;
   updatedAt: string;
 };
+
+export type FuturePositionStatus = 'pending' | 'locked' | 'completed';
+
+export type FuturePosition = {
+  id: string;
+  posNumber: string;
+  posName: string;
+  organization: string;
+  accountNumber: string | null;
+  incumbentName: string | null;
+  employeeNumber: string | null;
+  positionType: 'vacant' | 'replacement' | 'new';
+  hireDate: string | null;
+  classroomAssigned: string | null;
+  contractType: string | null;
+  contractStartDate: string | null;
+  contractEndDate: string | null;
+  letterNeeded: 'Change' | 'Rehire' | 'Other' | null;
+  notes: string | null;
+  submittedBy: string;
+  submittedByName: string;
+  status: FuturePositionStatus;
+  lockedAt: string | null;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type FuturePositionInput = {
+  posName: string;
+  organization: string;
+  accountNumber?: string | null;
+  incumbentName?: string | null;
+  employeeNumber?: string | null;
+  positionType?: 'vacant' | 'replacement' | 'new';
+  hireDate?: string | null;
+  classroomAssigned?: string | null;
+  contractType?: string | null;
+  contractStartDate?: string | null;
+  contractEndDate?: string | null;
+  letterNeeded?: 'Change' | 'Rehire' | 'Other' | null;
+  notes?: string | null;
+};
+
+export type FeatureFlag = {
+  key: string;
+  enabled: boolean;
+};

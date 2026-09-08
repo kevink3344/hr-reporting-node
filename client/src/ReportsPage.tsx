@@ -9,15 +9,13 @@ import {
   ChevronDown,
   ChevronRight,
   Clock,
-  FileDown,
-  FileSpreadsheet,
   FileText,
-  FileType,
   MessageSquare,
   Search,
   Share2,
   X
 } from 'lucide-react';
+import { CsvIcon, ExcelIcon, PdfIcon } from './ExportFormatIcons';
 import {
   createReportView,
   createViewComment,
@@ -221,8 +219,8 @@ function GenericReportView({
   // A column is a "position" column when it carries a pos_number / number /
   // position id we can deep-link into the Position Details drawer.
   function getPosNumber(row: Record<string, unknown>): string {
-    const raw = row['pos_number'] ?? row['posNumber'] ?? row['position_number'] ?? row['position_id'] ?? row['positionId'] ?? (() => {
-      const k = Object.keys(row).find((c) => c.toLowerCase().replace(/[^a-z0-9]/g, '') === 'posnumber' || c.toLowerCase().replace(/[^a-z0-9]/g, '') === 'positionnumber');
+    const raw = row['pos_number'] ?? row['posNumber'] ?? row['position_no'] ?? row['position_number'] ?? row['position_id'] ?? row['positionId'] ?? (() => {
+      const k = Object.keys(row).find((c) => c.toLowerCase().replace(/[^a-z0-9]/g, '') === 'posnumber' || c.toLowerCase().replace(/[^a-z0-9]/g, '') === 'positionnumber' || c.toLowerCase().replace(/[^a-z0-9]/g, '') === 'positionno');
       return k ? row[k] : '';
     })();
     return String(raw ?? '').trim();
@@ -230,7 +228,7 @@ function GenericReportView({
 
   function isPositionColumn(column: string): boolean {
     const norm = column.toLowerCase().replace(/[^a-z0-9]/g, '');
-    return norm === 'posnumber' || norm === 'positionnumber' || norm === 'number' || norm === 'positionid' || norm === 'position';
+    return norm === 'posnumber' || norm === 'positionnumber' || norm === 'positionno' || norm === 'number' || norm === 'positionid' || norm === 'position';
   }
 
   function isPersonColumn(column: string): boolean {
@@ -442,9 +440,9 @@ function GenericReportView({
       <button className="back-button" onClick={onBack}><ArrowLeft size={17} />All reports</button>
       <div className="report-view-actions">
         <span className="report-view-meta">{displayRows.length} of {result.rows.length} rows{result.truncated ? ' (truncated)' : ''}</span>
-        <button className="export-button export-button--icon" onClick={() => void exportGenericReport(exportRun)} aria-label="Export to Excel" title="Export to Excel"><FileSpreadsheet size={17} /></button>
-        <button className="export-button export-button--secondary export-button--icon" onClick={() => void exportGenericReportToCsv(exportRun)} aria-label="Export to CSV" title="Export to CSV"><FileDown size={17} /></button>
-        <button className="export-button export-button--secondary export-button--icon" onClick={() => void exportGenericReportToPdf(exportRun)} aria-label="Export to PDF" title="Export to PDF"><FileType size={17} /></button>
+        <button className="export-button export-button--secondary export-button--icon" onClick={() => void exportGenericReport(exportRun)} aria-label="Export to Excel" title="Export to Excel"><ExcelIcon /></button>
+        <button className="export-button export-button--secondary export-button--icon" onClick={() => void exportGenericReportToCsv(exportRun)} aria-label="Export to CSV" title="Export to CSV"><CsvIcon /></button>
+        <button className="export-button export-button--secondary export-button--icon" onClick={() => void exportGenericReportToPdf(exportRun)} aria-label="Export to PDF" title="Export to PDF"><PdfIcon /></button>
       </div>
       <div className="report-view-title"><p className="eyebrow">Report{result.report.sectionTitle ? ` — ${result.report.sectionTitle}` : ''}</p><h2>{result.report.title} <span className="report-scope">{result.organization}</span></h2></div>
     </div>

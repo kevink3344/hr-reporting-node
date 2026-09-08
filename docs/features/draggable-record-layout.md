@@ -4,10 +4,12 @@
 
 ## Current state (2026-09-05)
 
-- `client/src/App.tsx` renders `EmployeeRecord` as a fixed sequence of 8 `RecordSection` blocks inside `.employee-record` (Identity → Contact → Assignment → Compensation → Contract → Licensure → Service summary → Leave balances). Order is hard-coded in JSX.
-- The record is shown in a right-side drawer (`.record-drawer`, `position: fixed`, `width: min(640px, 96vw)`) with a scrim. No drag, no persistence.
-- No per-user preference storage exists yet. Auth is header-based (`x-user-roles` / `x-user-name`, `LoginSession` in memory); there is no `user_preferences` table.
-- Styles: `.record-section` is a bordered card with `h4` header + `.record-grid` (2-col). No drag affordance.
+- `client/src/App.tsx` renders `EmployeeRecord` as a data-driven list of sections (`layout.map`) inside `.employee-record`. Order is no longer hard-coded — it is driven by the per-user saved layout.
+- The record is shown in a right-side drawer (`.record-drawer`, `position: fixed`, `width: min(640px, 96vw)`) with a scrim.
+- **Drag-to-reorder** is implemented (native HTML5 DnD, no dependency), with up/down chevron buttons as a keyboard/touch fallback, and **Save / Reset** toolbar.
+- **Visibility** is now implemented (Phase 3): each section header has an eye toggle (hide/show), hidden sections collapse into a dashed "hidden" row with a "Show section" button, the toolbar shows an "N sections hidden" hint plus a "Show all sections" button, and `Reset to default` restores every section to visible.
+- Persistence is **localStorage** per user (`hr-report-record-layout:<userId>`, or `...:anon`). Data model upgraded from `string[]` to `Array<{ id, visible }>` while remaining backward-compatible with saved `string[]` values.
+- Styles: `.record-section` is a bordered card with `h4` header + `.record-grid` (2-col). Drag affordance + visibility controls styled in light and dark themes.
 
 ## UX design
 
@@ -149,7 +151,7 @@ If a new section is added later, it appends to the end for users with a saved la
 
 1. **Phase 1 (v1, localStorage):** Ship `recordLayout.ts` + `DraggableSection` + `EmployeeRecord` refactor + styles. No backend changes. Document in `docs/features/draggable-record-layout.md` (this file).
 2. **Phase 2 (v2, server-persisted):** Add `user_preferences` table + API + repository, update `recordLayout.ts` to try API first then fall back to localStorage. Migrate existing localStorage layouts on first load after upgrade.
-3. **Future:** Add per-section collapse/visibility toggle (persist `visible: boolean` alongside order), and optionally per-section width or print order.
+3. **Phase 3 (visibility, implemented):** Add per-section collapse/visibility toggle (persist `visible: boolean` alongside order). Each section header gets an eye toggle; hidden sections collapse into a dashed "hidden" row with a "Show section" button; the toolbar shows an "N sections hidden" hint + "Show all sections" button; `Reset to default` restores all sections visible. Persisted value upgraded from `string[]` to `Array<{ id, visible }>`, with `normalizeLayout` still accepting legacy `string[]`.
 
 ## Alternatives considered
 
@@ -160,5 +162,5 @@ If a new section is added later, it appends to the end for users with a saved la
 ## Open questions for review
 
 - Should the layout be **per-user** (recommended) or **per-device**? (v1 localStorage is per-device; v2 server is per-user.)
-- Should we also allow **hiding** sections in v1, or defer to v2?
+- Should we also allow **hiding** sections? (Implemented in v1 — see Phase 3.)
 - Should `Reset to default` require confirmation?

@@ -107,6 +107,70 @@ describe('HR Reporting API foundation', () => {
   });
 });
 
+describe('School scoping for restricted users', () => {
+  let server: Server;
+  let baseUrl: string;
+
+  beforeEach(async () => {
+    server = createServer(app);
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Test server did not bind');
+    baseUrl = `http://127.0.0.1:${address.port}`;
+  });
+
+  afterEach(async () => {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  });
+
+  it('returns only the granted schools for a restricted user', async () => {
+    const response = await fetch(`${baseUrl}/api/schools`, {
+      headers: { 'x-user-school-ids': 'school-001', 'x-user-view-all': '0' }
+    });
+    expect(response.status).toBe(200);
+    const schools = await response.json();
+    expect(schools).toHaveLength(1);
+    expect(schools[0].id).toBe('school-001');
+    expect(schools[0].name).toBe('Test Oak Elementary');
+  });
+
+  it('returns all schools for an admin even with a restricted scope header set', async () => {
+    const response = await fetch(`${baseUrl}/api/schools`, {
+      headers: { 'x-user-roles': 'hr_admin', 'x-user-school-ids': 'school-001', 'x-user-view-all': '0' }
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toHaveLength(3);
+  });
+
+  it('returns all schools when no scope header is sent (anonymous / backward compat)', async () => {
+    const response = await fetch(`${baseUrl}/api/schools`);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toHaveLength(3);
+  });
+
+  it('scopes people to the granted schools', async () => {
+    const response = await fetch(`${baseUrl}/api/people`, {
+      headers: { 'x-user-school-ids': 'school-001', 'x-user-view-all': '0' }
+    });
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.total).toBeGreaterThan(0);
+    for (const person of body.data as { organization: string }[]) {
+      expect(person.organization).toBe('Test Oak Elementary');
+    }
+  });
+
+  it('returns no people for a school not granted to the user', async () => {
+    const response = await fetch(`${baseUrl}/api/people`, {
+      headers: { 'x-user-school-ids': 'school-999', 'x-user-view-all': '0' }
+    });
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.total).toBe(0);
+    expect(body.data).toEqual([]);
+  });
+});
+
 describe('Configurable reports API', () => {
   let server: Server;
   let baseUrl: string;

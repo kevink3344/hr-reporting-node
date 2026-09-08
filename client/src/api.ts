@@ -1,4 +1,8 @@
 import type {
+  FeatureFlag,
+  FuturePosition,
+  FuturePositionInput,
+  FuturePositionStatus,
   GenericReportRun,
   LoginSession,
   PersonPage,
@@ -49,15 +53,27 @@ function viewHeaders(session: LoginSession | null | undefined): Record<string, s
   };
 }
 
-export function getSchools(): Promise<School[]> {
-  return request<School[]>('/api/schools');
+// School-scoping headers: tell the API which schools the signed-in user may
+// view. When the user cannot view all schools, list/filter endpoints return
+// only the schools in schoolIds.
+function scopeHeaders(session: LoginSession | null | undefined): Record<string, string> {
+  if (!session) return {};
+  const headers: Record<string, string> = {
+    'x-user-school-ids': session.user.schoolIds.join(','),
+    'x-user-view-all': session.user.canViewAllSchools ? '1' : '0'
+  };
+  return headers;
 }
 
-export function getPeople(search: string, schoolId: string): Promise<PersonPage> {
+export function getSchools(session?: LoginSession | null): Promise<School[]> {
+  return request<School[]>('/api/schools', { headers: scopeHeaders(session) });
+}
+
+export function getPeople(search: string, schoolId: string, session?: LoginSession | null): Promise<PersonPage> {
   const params = new URLSearchParams({ page: '1', pageSize: '50' });
   if (search.trim()) params.set('search', search.trim());
   if (schoolId) params.set('schoolId', schoolId);
-  return request<PersonPage>(`/api/people?${params.toString()}`);
+  return request<PersonPage>(`/api/people?${params.toString()}`, { headers: scopeHeaders(session) });
 }
 
 export async function login(wakeId: string, employeeId: string): Promise<LoginSession> {
@@ -414,6 +430,82 @@ export function updateSystemMessage(
 export function deleteSystemMessage(session: LoginSession, id: string): Promise<void> {
   return request<void>(`/api/system-messages/${encodeURIComponent(id)}`, {
     method: 'DELETE',
+    headers: adminHeaders(session)
+  });
+}
+
+// ---- Feature flags (Settings toggle) ----
+export function getFeatureFlag(session: LoginSession | null | undefined): Promise<FeatureFlag> {
+  return request<FeatureFlag>('/api/feature-flags', { headers: viewHeaders(session) });
+}
+
+export function setFeatureFlag(session: LoginSession, key: string, enabled: boolean): Promise<FeatureFlag> {
+  return request<FeatureFlag>(`/api/feature-flags/${encodeURIComponent(key)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...adminHeaders(session) },
+    body: JSON.stringify({ enabled })
+  });
+}
+
+// ---- Future Positions (staged new incumbents) ----
+export function getFuturePositions(
+  session: LoginSession,
+  filter?: { posNumber?: string; organization?: string; status?: FuturePositionStatus }
+): Promise<FuturePosition[]> {
+  const params = new URLSearchParams();
+  if (filter?.posNumber) params.set('posNumber', filter.posNumber);
+  if (filter?.organization) params.set('organization', filter.organization);
+  if (filter?.status) params.set('status', filter.status);
+  const qs = params.toString();
+  return request<FuturePosition[]>(`/api/future-positions${qs ? `?${qs}` : ''}`, { headers: adminHeaders(session) });
+}
+
+export function getFuturePositionForPosition(
+  session: LoginSession,
+  posNumber: string,
+  organization: string
+): Promise<FuturePosition | null> {
+  const params = new URLSearchParams({ organization });
+  return request<FuturePosition | null>(
+    `/api/positions/${encodeURIComponent(posNumber)}/future?${params.toString()}`,
+    { headers: viewHeaders(session) }
+  );
+}
+
+export function createFuturePosition(
+  session: LoginSession,
+  posNumber: string,
+  input: FuturePositionInput
+): Promise<FuturePosition> {
+  return request<FuturePosition>(`/api/positions/${encodeURIComponent(posNumber)}/future`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...viewHeaders(session) },
+    body: JSON.stringify(input)
+  });
+}
+
+export function updateFuturePosition(
+  session: LoginSession,
+  id: string,
+  patch: Partial<FuturePositionInput>
+): Promise<FuturePosition> {
+  return request<FuturePosition>(`/api/future-positions/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...viewHeaders(session) },
+    body: JSON.stringify(patch)
+  });
+}
+
+export function sendNowFuturePosition(session: LoginSession, id: string): Promise<FuturePosition> {
+  return request<FuturePosition>(`/api/future-positions/${encodeURIComponent(id)}/send-now`, {
+    method: 'POST',
+    headers: viewHeaders(session)
+  });
+}
+
+export function completeFuturePosition(session: LoginSession, id: string): Promise<FuturePosition> {
+  return request<FuturePosition>(`/api/future-positions/${encodeURIComponent(id)}/complete`, {
+    method: 'POST',
     headers: adminHeaders(session)
   });
 }

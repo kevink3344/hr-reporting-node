@@ -325,7 +325,40 @@ export const mysqlRepositories: Repositories = {
   reportViewComments: fixtureRepositories.reportViewComments,
   positionPins: fixtureRepositories.positionPins,
   positionComments: fixtureRepositories.positionComments,
-  systemMessages: fixtureRepositories.systemMessages
+  systemMessages: fixtureRepositories.systemMessages,
+  futurePositions: fixtureRepositories.futurePositions,
+  featureFlags: {
+    async get(key) {
+      const rows = await query<{ feature_key: string; enabled: number | null; updated_by: string | null; updated_at?: string | null }>(
+        'SELECT feature_key, enabled, updated_by, updated_at FROM feature_flags WHERE feature_key = ? LIMIT 1',
+        [key]
+      );
+      if (!rows[0]) return null;
+      return {
+        key: String(rows[0].feature_key),
+        enabled: (rows[0].enabled ?? 0) === 1,
+        updatedBy: rows[0].updated_by ? String(rows[0].updated_by) : null,
+        updatedAt: rows[0].updated_at ? String(rows[0].updated_at) : null
+      };
+    },
+    async set(key, enabled, updatedBy) {
+      await query(
+        `INSERT INTO feature_flags (feature_key, enabled, updated_by) VALUES (?, ?, ?)
+         ON DUPLICATE KEY UPDATE enabled = VALUES(enabled), updated_by = VALUES(updated_by)`,
+        [key, enabled ? 1 : 0, updatedBy]
+      );
+      const rows = await query<{ feature_key: string; enabled: number | null; updated_by: string | null; updated_at?: string | null }>(
+        'SELECT feature_key, enabled, updated_by, updated_at FROM feature_flags WHERE feature_key = ? LIMIT 1',
+        [key]
+      );
+      return {
+        key: String(rows[0].feature_key),
+        enabled: (rows[0].enabled ?? 0) === 1,
+        updatedBy: rows[0].updated_by ? String(rows[0].updated_by) : null,
+        updatedAt: rows[0].updated_at ? String(rows[0].updated_at) : null
+      };
+    }
+  }
 };
 
 function buildRecord(employee: EmployeeRow, school: SchoolRow | undefined): PersonRecord {

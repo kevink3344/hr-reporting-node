@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AlertCircle, ArrowUpRight, BarChart3, Building2, Check, ChevronDown, ChevronUp, FileText, GripVertical, Home, LogOut, Menu, MessageSquare, Moon, Palette, Pin, PinOff, Search, Send, Settings2, SlidersHorizontal, Sun, Trash2, Users, X } from 'lucide-react';
-import { checkPositionPins, createPositionComment, createPositionPin, deletePositionComment, deletePositionPin, deletePositionPinByKey, getPeople, getPersonRecord, getPositionComments, getPositionDetails, getPositionPins, getSchools, getSystemMessages, login } from './api';
-import type { LoginSession, Person, PersonRecord, PositionComment, PositionDetails, School, SystemMessage } from './types';
+import { AlertCircle, ArrowUpRight, BarChart3, Building2, CalendarClock, Check, ChevronDown, ChevronUp, ClipboardCheck, Copy, Eye, EyeOff, FileText, GripVertical, Home, LogOut, Menu, MessageSquare, Moon, Palette, Pin, PinOff, Search, Send, Settings2, SlidersHorizontal, Sun, Trash2, UserPlus, Users, X } from 'lucide-react';
+import { checkPositionPins, createPositionComment, createPositionPin, createFuturePosition, deletePositionComment, deletePositionPin, deletePositionPinByKey, getFeatureFlag, getFuturePositionForPosition, getPeople, getPersonRecord, getPositionComments, getPositionDetails, getPositionPins, getSchools, getSystemMessages, login } from './api';
+import type { FuturePosition, FuturePositionStatus, LoginSession, Person, PersonRecord, PositionComment, PositionDetails, School, SystemMessage } from './types';
 import { PositionsPage } from './PositionsPage';
+import { FuturePositionsPage } from './FuturePositionsPage';
 import { ReportsPage } from './ReportsPage';
 import { SettingsPage } from './SettingsPage';
 import { UserSettingsPage } from './UserSettingsPage';
-import { DEFAULT_RECORD_LAYOUT, RECORD_SECTION_TITLES, arraysEqual, loadRecordLayout, resetRecordLayout, saveRecordLayout } from './recordLayout';
-import type { RecordSectionId } from './recordLayout';
+import { DEFAULT_RECORD_LAYOUT, RECORD_SECTION_TITLES, arraysEqual, hiddenSectionIds, loadRecordLayout, reorderVisibleSections, resetRecordLayout, saveRecordLayout, setSectionVisible, showAllSections, visibleSectionIds } from './recordLayout';
+import type { RecordLayout, RecordSectionId } from './recordLayout';
 import { DEFAULT_SECTION_COLORS, SECTION_COLOR_OPTIONS, clearSectionColor, loadSectionColors, saveSectionColor, sectionHeaderColor } from './sectionColors';
 import { loadHomePage, saveHomePage } from './homePage';
 import type { HomePage } from './homePage';
@@ -108,6 +109,8 @@ function DraggableRecordSection({
   onDragEnd,
   onMoveUp,
   onMoveDown,
+  onToggleVisibility,
+  hidden,
   theme,
   children,
 }: {
@@ -128,22 +131,32 @@ function DraggableRecordSection({
   onDragEnd: () => void;
   onMoveUp: () => void;
   onMoveDown: () => void;
+  onToggleVisibility: () => void;
+  hidden: boolean;
   theme: 'light' | 'dark';
   children: React.ReactNode;
 }) {
   return <section
-    className={`record-section ${tone} ${isDragging ? 'dragging' : ''} ${isDropTarget ? 'drag-over' : ''}`}
+    className={`record-section ${tone} ${isDragging ? 'dragging' : ''} ${isDropTarget ? 'drag-over' : ''} ${hidden ? 'record-section-hidden' : ''}`}
     draggable
     onDragStart={onDragStart}
     onDragOver={onDragOver}
     onDrop={onDrop}
     onDragEnd={onDragEnd}
-    aria-label={`${title} section, position ${index + 1} of ${total}, draggable`}
+    aria-label={`${title} section, position ${index + 1} of ${total}, ${hidden ? 'hidden' : 'visible'}, draggable`}
   >
     <h4 draggable onDragStart={onDragStart} style={customColor ? { background: sectionHeaderColor(headerColor, theme) } : undefined}>
       <GripVertical size={14} className="record-drag-handle" aria-hidden="true" />
       <span className="record-section-title">{title}</span>
       <span className="record-section-actions">
+        <button
+          className={`record-visibility-btn ${hidden ? 'hidden' : ''}`}
+          onClick={onToggleVisibility}
+          aria-label={`${hidden ? 'Show' : 'Hide'} ${title}`}
+          title={hidden ? 'Show section' : 'Hide section'}
+        >
+          {hidden ? <EyeOff size={14} /> : <Eye size={14} />}
+        </button>
         <SectionColorPicker value={headerColor} defaultColor={defaultColor} onSelect={onColorChange} />
         <button className="record-move-btn" onClick={onMoveUp} disabled={index === 0} aria-label={`Move ${title} up`} title="Move up"><ChevronUp size={14} /></button>
         <button className="record-move-btn" onClick={onMoveDown} disabled={index === total - 1} aria-label={`Move ${title} down`} title="Move down"><ChevronDown size={14} /></button>
@@ -161,16 +174,18 @@ function EmployeeRecord({
   onReorder,
   onMoveUp,
   onMoveDown,
+  onToggleVisibility,
   onOpenPosition,
   theme,
 }: {
   record: PersonRecord;
-  layout: RecordSectionId[];
+  layout: RecordLayout;
   userId: string | null;
   onClose: () => void;
   onReorder: (from: number, to: number) => void;
   onMoveUp: (index: number) => void;
   onMoveDown: (index: number) => void;
+  onToggleVisibility: (id: RecordSectionId) => void;
   onOpenPosition: (posNumber: string, organization: string) => void;
   theme: 'light' | 'dark';
 }) {
@@ -228,37 +243,66 @@ function EmployeeRecord({
 
   const tones: Partial<Record<RecordSectionId, string>> = { leave: 'leave-section' };
 
+  // Only visible sections are rendered as expandable cards, numbered by their
+  // position among the VISIBLE sections. Hidden sections are collapsed into a
+  // compact "hidden" row (with a Show button) so the user can easily restore
+  // them without reordering anything. Drag/up/down operate on visible ordering.
+  const visibleOrder = visibleSectionIds(layout);
+  const totalVisible = visibleOrder.length;
+
   return <div className="employee-record">
     <div className="record-title"><div><p className="eyebrow">Employee record</p><h3>{record.identity.fullName}</h3></div><div className="record-title-actions"><span className="record-active"><span className="status-dot" />Active</span><button className="icon-button" onClick={onClose} aria-label="Close employee record" title="Close employee record"><X size={17} /></button></div></div>
-    {layout.map((id, index) => <DraggableRecordSection
-      key={id}
-      id={id}
-      title={RECORD_SECTION_TITLES[id]}
-      tone={tones[id] ?? ''}
-      headerColor={sectionColors[id] ?? DEFAULT_SECTION_COLORS[id]}
-      customColor={sectionColors[id] ?? null}
-      defaultColor={DEFAULT_SECTION_COLORS[id]}
-      onColorChange={(color) => handleColorChange(id, color)}
-      index={index}
-      total={layout.length}
-      isDragging={dragIndex === index}
-      isDropTarget={dropIndex === index}
-      onDragStart={(e) => handleDragStart(e, index)}
-      onDragOver={(e) => handleDragOver(e, index)}
-      onDrop={(e) => handleDrop(e, index)}
-      onDragEnd={handleDragEnd}
-      onMoveUp={() => onMoveUp(index)}
-      onMoveDown={() => onMoveDown(index)}
-      theme={theme}
-    >{renderers[id]}</DraggableRecordSection>)}
+    {layout.map((item) => {
+      const visibleIndex = visibleOrder.indexOf(item.id);
+      if (visibleIndex === -1) {
+        return (
+          <div className="record-hidden-row" key={item.id}>
+            <span className="record-hidden-label"><EyeOff size={14} aria-hidden="true" />{RECORD_SECTION_TITLES[item.id]} <span className="record-hidden-tag">hidden</span></span>
+            <button className="record-show-btn" onClick={() => onToggleVisibility(item.id)}>Show section</button>
+          </div>
+        );
+      }
+      return <DraggableRecordSection
+        key={item.id}
+        id={item.id}
+        title={RECORD_SECTION_TITLES[item.id]}
+        tone={tones[item.id] ?? ''}
+        headerColor={sectionColors[item.id] ?? DEFAULT_SECTION_COLORS[item.id]}
+        customColor={sectionColors[item.id] ?? null}
+        defaultColor={DEFAULT_SECTION_COLORS[item.id]}
+        onColorChange={(color) => handleColorChange(item.id, color)}
+        index={visibleIndex}
+        total={totalVisible}
+        isDragging={dragIndex === visibleIndex}
+        isDropTarget={dropIndex === visibleIndex}
+        onDragStart={(e) => handleDragStart(e, visibleIndex)}
+        onDragOver={(e) => handleDragOver(e, visibleIndex)}
+        onDrop={(e) => handleDrop(e, visibleIndex)}
+        onDragEnd={handleDragEnd}
+        onMoveUp={() => onMoveUp(visibleIndex)}
+        onMoveDown={() => onMoveDown(visibleIndex)}
+        onToggleVisibility={() => onToggleVisibility(item.id)}
+        hidden={false}
+        theme={theme}
+      >{renderers[item.id]}</DraggableRecordSection>;
+    })}
   </div>;
 }
 
 // Read-only Position Details drawer — non-draggable, mirrors the field layout
 // of the employee record but never reorders.
-function PositionDetailView({ details, onClose, onOpenRecord, pinned, onTogglePin, session }: { details: PositionDetails; onClose: () => void; onOpenRecord: (employeeNumber: string) => void; pinned: boolean; onTogglePin: () => void; session: LoginSession | null }) {
+function PositionDetailView({ details, onClose, onOpenRecord, pinned, onTogglePin, session, futureEnabled }: { details: PositionDetails; onClose: () => void; onOpenRecord: (employeeNumber: string) => void; pinned: boolean; onTogglePin: () => void; session: LoginSession | null; futureEnabled: boolean }) {
   const [tab, setTab] = useState<'general' | 'notes'>('general');
+  const [incumbentTab, setIncumbentTab] = useState<'current' | 'future'>('current');
   const [noteCount, setNoteCount] = useState(0);
+  const [future, setFuture] = useState<FuturePosition | null>(null);
+  const [futureLoading, setFutureLoading] = useState(false);
+  const [futurePanelOpen, setFuturePanelOpen] = useState(false);
+  const [futureSaving, setFutureSaving] = useState(false);
+  const [futureError, setFutureError] = useState('');
+  const [futureNotice, setFutureNotice] = useState('');
+  const [toast, setToast] = useState('');
+  const [futureForm, setFutureForm] = useState<{ incumbentName: string; employeeNumber: string; positionType: 'vacant' | 'replacement' | 'new'; hireDate: string; classroomAssigned: string; accountNumber: string; contractType: string; contractStartDate: string; contractEndDate: string; letterNeeded: 'Change' | 'Rehire' | 'Other' | ''; notes: string }>({ incumbentName: '', employeeNumber: '', positionType: 'vacant', hireDate: '', classroomAssigned: '', accountNumber: '', contractType: '', contractStartDate: '', contractEndDate: '', letterNeeded: '', notes: '' });
   const { position, incumbent, accountNumber, org, vacant } = details;
 
   // Populate the Notes tab badge on mount. The child notes tab keeps it in sync
@@ -272,7 +316,78 @@ function PositionDetailView({ details, onClose, onOpenRecord, pinned, onTogglePi
     return () => { active = false; };
   }, [session, position.posNumber, org]);
 
+  // Load any existing pending future record for this position when the flag is on.
+  useEffect(() => {
+    if (!session || !futureEnabled) { setFuture(null); return; }
+    let active = true;
+    setFutureLoading(true);
+    getFuturePositionForPosition(session, position.posNumber, org)
+      .then((found) => { if (active) setFuture(found); })
+      .catch(() => { if (active) setFuture(null); })
+      .finally(() => { if (active) setFutureLoading(false); });
+    return () => { active = false; };
+  }, [session, position.posNumber, org, futureEnabled]);
+
+  function resetFutureForm() {
+    setFutureForm({ incumbentName: '', employeeNumber: '', positionType: 'vacant', hireDate: '', classroomAssigned: '', accountNumber: accountNumber || '', contractType: '', contractStartDate: '', contractEndDate: '', letterNeeded: '', notes: '' });
+  }
+
+  function showToast(message: string) {
+    setToast(message);
+    window.setTimeout(() => setToast(''), 3000);
+  }
+
+  function copyIncumbentForm() {
+    if (future?.status === 'locked') { showToast('Record is currently locked and cannot be edited'); return; }
+    if (!incumbent) { setFutureError('This position has no current incumbent to copy.'); return; }
+    setFutureError('');
+    setFutureNotice('');
+    setFutureForm((form) => ({
+      ...form,
+      incumbentName: incumbent.fullName || '',
+      employeeNumber: incumbent.employeeNumber || '',
+      accountNumber: accountNumber || form.accountNumber,
+      classroomAssigned: incumbent.classroom || '',
+      contractType: incumbent.contractType || '',
+      contractStartDate: incumbent.contractStart || '',
+      contractEndDate: incumbent.contractEnd || ''
+    }));
+    setFuturePanelOpen(true);
+  }
+
+  async function submitFuture() {
+    if (!session || futureSaving) return;
+    if (!futureForm.incumbentName.trim()) { setFutureError('A name is required.'); return; }
+    setFutureSaving(true);
+    setFutureError('');
+    setFutureNotice('');
+    try {
+      const created = await createFuturePosition(session, position.posNumber, {
+        posName: position.posName || `Position ${position.posNumber}`,
+        organization: org,
+        ...futureForm,
+        hireDate: futureForm.hireDate || null,
+        classroomAssigned: futureForm.classroomAssigned || null,
+        accountNumber: futureForm.accountNumber || accountNumber || undefined,
+        contractType: futureForm.contractType || null,
+        contractStartDate: futureForm.contractStartDate || null,
+        contractEndDate: futureForm.contractEndDate || null,
+        letterNeeded: futureForm.letterNeeded || null,
+        notes: futureForm.notes || null
+      });
+      setFuture(created);
+      setFuturePanelOpen(false);
+      setFutureNotice('Record saved as Pending. You have one hour to modify it, or click \'Send Now\'.');
+      resetFutureForm();
+    } catch (failure) {
+      setFutureError(failure instanceof Error && failure.message.startsWith('HTTP_') ? 'The record could not be saved.' : (failure instanceof Error ? failure.message : 'The record could not be saved.'));
+    } finally {
+      setFutureSaving(false);
+    }
+  }
+
   return <div className="employee-record">
+    {toast && <div className="record-toast" role="status" aria-live="polite">{toast}</div>}
     <div className="record-title">
       <div>
         <p className="eyebrow">Position details</p>
@@ -318,22 +433,161 @@ function PositionDetailView({ details, onClose, onOpenRecord, pinned, onTogglePi
           <RecordField label="Calendar" value={position.calendar} />
         </div>
         <h4 className="record-section-title">Incumbent</h4>
-        {incumbent ? (
-          <div className="record-grid">
-            <RecordField label="Name" value={<button className="report-cell-link" onClick={() => onOpenRecord(incumbent.employeeNumber)}>{incumbent.fullName}</button>} />
-            <RecordField label="Employee no." value={<button className="report-cell-link" onClick={() => onOpenRecord(incumbent.employeeNumber)}>{incumbent.employeeNumber}</button>} mono />
-            <RecordField label="Tenure code" value={`${incumbent.tenureCode}${incumbent.tenureDesc ? ` — ${incumbent.tenureDesc}` : ''}`} />
-            <RecordField label="Contract type" value={incumbent.contractType} />
-            <RecordField label="Contract ID" value={incumbent.contractId} mono />
-            <RecordField label="Contract start" value={incumbent.contractStart} />
-            <RecordField label="Contract end" value={incumbent.contractEnd} />
-            <RecordField label="TAP" value={incumbent.tap} />
-            <RecordField label="Months" value={incumbent.months} />
-            <RecordField label="Classroom" value={incumbent.classroom} />
-            <RecordField label="Mail stop" value={incumbent.mailstop} mono />
-          </div>
+        <div className="position-incumbent-tabs" role="tablist" aria-label="Incumbent sections">
+          <button role="tab" aria-selected={incumbentTab === 'current'} className={`position-incumbent-tab ${incumbentTab === 'current' ? 'active' : ''}`} onClick={() => setIncumbentTab('current')}>
+            <Users size={15} />Current
+          </button>
+          {futureEnabled && (
+            <button role="tab" aria-selected={incumbentTab === 'future'} className={`position-incumbent-tab ${incumbentTab === 'future' ? 'active' : ''}`} onClick={() => setIncumbentTab('future')}>
+              <CalendarClock size={15} />Future
+              {future && <span className={`position-tab-badge status-pill--${future.status}`}>{future.status}</span>}
+            </button>
+          )}
+          {futureEnabled && session && (
+            <div className="future-position-actions">
+                {incumbent && (
+                  <button className="icon-button icon-button--bare" onClick={copyIncumbentForm} aria-label="Copy current incumbent into the form" title="Copy current incumbent">
+                    <Copy size={16} />
+                  </button>
+                )}
+                <button className="icon-button icon-button--bare" onClick={() => {
+                  if (future?.status === 'locked') { showToast('Record is currently locked and cannot be edited'); return; }
+                  setFuturePanelOpen((open) => !open); setFutureError(''); setFutureNotice('');
+                }} aria-label="Stage a new incumbent" title="Stage a new incumbent (Future Positions)">
+                  <UserPlus size={16} />
+                </button>
+            </div>
+          )}
+        </div>
+        {(incumbentTab === 'current' || !futureEnabled) ? (
+          incumbent ? (
+            <div className="record-grid">
+              <RecordField label="Name" value={<button className="report-cell-link" onClick={() => onOpenRecord(incumbent.employeeNumber)}>{incumbent.fullName}</button>} />
+              <RecordField label="Employee no." value={<button className="report-cell-link" onClick={() => onOpenRecord(incumbent.employeeNumber)}>{incumbent.employeeNumber}</button>} mono />
+              <RecordField label="Tenure code" value={`${incumbent.tenureCode}${incumbent.tenureDesc ? ` — ${incumbent.tenureDesc}` : ''}`} />
+              <RecordField label="Contract type" value={incumbent.contractType} />
+              <RecordField label="Contract ID" value={incumbent.contractId} mono />
+              <RecordField label="Contract start" value={incumbent.contractStart} />
+              <RecordField label="Contract end" value={incumbent.contractEnd} />
+              <RecordField label="TAP" value={incumbent.tap} />
+              <RecordField label="Months" value={incumbent.months} />
+              <RecordField label="Classroom" value={incumbent.classroom} />
+              <RecordField label="Mail stop" value={incumbent.mailstop} mono />
+            </div>
+          ) : (
+            <div className="detail-placeholder"><Users size={24} /><p>No incumbent is assigned to this position.</p></div>
+          )
         ) : (
-          <div className="detail-placeholder"><Users size={24} /><p>No incumbent is assigned to this position.</p></div>
+          <>
+            {futureLoading ? <div className="empty-state"><span className="loader" />Loading existing record</div> : future ? (
+              <>
+                <div className="future-position-detail-head">
+                  <span className={`status-pill status-pill--${future.status}`}>{future.status}</span>
+                  <strong className="future-position-detail-name">{future.incumbentName || 'Not provided'}</strong>
+                  {future.status === 'pending' && <span className="future-position-existing-hint">You can edit this for one hour.</span>}
+                  {future.status === 'locked' && <span className="future-position-existing-hint">Locked pending data team review.</span>}
+                  {future.status === 'completed' && <span className="future-position-existing-hint">This replacement has been completed.</span>}
+                </div>
+                <div className="record-grid">
+                  <RecordField label="New incumbent" value={future.incumbentName} />
+                  <RecordField label="Employee no." value={future.employeeNumber} mono />
+                  <RecordField label="Position type" value={future.positionType} />
+                  <RecordField label="Effective date" value={future.hireDate} />
+                  <RecordField label="Classroom" value={future.classroomAssigned} />
+                  <RecordField label="Account" value={future.accountNumber} mono />
+                  <RecordField label="Contract type" value={future.contractType} />
+                  <RecordField label="Contract start" value={future.contractStartDate} />
+                  <RecordField label="Contract end" value={future.contractEndDate} />
+                  <RecordField label="Letter needed" value={future.letterNeeded} />
+                  <RecordField label="Submitted by" value={future.submittedByName} />
+                </div>
+                {future.notes && <p className="future-position-card-notes">{future.notes}</p>}
+              </>
+            ) : (!futureEnabled || !session) ? null : (
+              <div className="detail-placeholder"><CalendarClock size={24} /><p>No future incumbent has been staged for this position.</p></div>
+            )}
+            {futureEnabled && session && futurePanelOpen && (
+              <div className="future-position-panel">
+                <div className="future-position-panel-head">
+                  <span className="future-position-panel-title">Stage a new incumbent</span>
+                  <button className="icon-button" onClick={() => setFuturePanelOpen(false)} aria-label="Close panel" title="Close panel"><X size={16} /></button>
+                </div>
+                {futureLoading ? <div className="empty-state"><span className="loader" />Loading existing record</div> : (
+                  <>
+                    {future && future.status !== 'completed' && (
+                      <div className="future-position-detail-head">
+                        <span className={`status-pill status-pill--${future.status}`}>{future.status}</span>
+                        <strong className="future-position-detail-name">{future.incumbentName || 'Not provided'}</strong>
+                        {future.status === 'pending' && <span className="future-position-existing-hint">You can edit this for one hour.</span>}
+                        {future.status === 'locked' && <span className="future-position-existing-hint">Locked pending data team review.</span>}
+                      </div>
+                    )}
+                    <div className="future-position-form">
+                      <label className="future-position-field">
+                        <span>New incumbent name</span>
+                        <input type="text" value={futureForm.incumbentName} onChange={(e) => setFutureForm((f) => ({ ...f, incumbentName: e.target.value }))} placeholder="Full name" />
+                      </label>
+                      <label className="future-position-field">
+                        <span>Employee number</span>
+                        <input type="text" value={futureForm.employeeNumber} onChange={(e) => setFutureForm((f) => ({ ...f, employeeNumber: e.target.value }))} placeholder="e.g. 12345" />
+                      </label>
+                      <label className="future-position-field">
+                        <span>Position type</span>
+                        <select value={futureForm.positionType} onChange={(e) => setFutureForm((f) => ({ ...f, positionType: e.target.value as 'vacant' | 'replacement' | 'new' }))}>
+                          <option value="vacant">Vacant</option>
+                          <option value="replacement">Replacement</option>
+                          <option value="new">New</option>
+                        </select>
+                      </label>
+                      <label className="future-position-field">
+                        <span>Effective date</span>
+                        <input type="date" value={futureForm.hireDate} onChange={(e) => setFutureForm((f) => ({ ...f, hireDate: e.target.value }))} />
+                      </label>
+                      <label className="future-position-field">
+                        <span>Classroom Assigned</span>
+                        <input type="text" value={futureForm.classroomAssigned} onChange={(e) => setFutureForm((f) => ({ ...f, classroomAssigned: e.target.value }))} placeholder="Optional" />
+                      </label>
+                      <label className="future-position-field">
+                        <span>Account number</span>
+                        <input type="text" value={futureForm.accountNumber} onChange={(e) => setFutureForm((f) => ({ ...f, accountNumber: e.target.value }))} placeholder={accountNumber || 'Optional'} />
+                      </label>
+                      <label className="future-position-field">
+                        <span>Contract Type</span>
+                        <input type="text" value={futureForm.contractType} onChange={(e) => setFutureForm((f) => ({ ...f, contractType: e.target.value }))} placeholder="Optional" />
+                      </label>
+                      <label className="future-position-field">
+                        <span>Contract Start Date</span>
+                        <input type="date" value={futureForm.contractStartDate} onChange={(e) => setFutureForm((f) => ({ ...f, contractStartDate: e.target.value }))} />
+                      </label>
+                      <label className="future-position-field">
+                        <span>Contract End Date</span>
+                        <input type="date" value={futureForm.contractEndDate} onChange={(e) => setFutureForm((f) => ({ ...f, contractEndDate: e.target.value }))} />
+                      </label>
+                      <label className="future-position-field">
+                        <span>Letter Needed</span>
+                        <select value={futureForm.letterNeeded} onChange={(e) => setFutureForm((f) => ({ ...f, letterNeeded: e.target.value as 'Change' | 'Rehire' | 'Other' | '' }))}>
+                          <option value="">—</option>
+                          <option value="Change">Change</option>
+                          <option value="Rehire">Rehire</option>
+                          <option value="Other">Other</option>
+                        </select>
+                      </label>
+                      <label className="future-position-field">
+                        <span>Notes</span>
+                        <textarea rows={3} value={futureForm.notes} onChange={(e) => setFutureForm((f) => ({ ...f, notes: e.target.value }))} placeholder="Anything the data team should know" />
+                      </label>
+                      {futureError && <p className="future-position-error">{futureError}</p>}
+                      {futureNotice && <p className="future-position-notice">{futureNotice}</p>}
+                      <div className="future-position-actions">
+                        <button className="back-button" type="button" disabled={futureSaving} onClick={() => setFuturePanelOpen(false)}>Cancel</button>
+                        <button className="export-button" type="button" disabled={futureSaving} onClick={() => void submitFuture()}><Check size={14} />Save</button>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+          </>
         )}
       </>
     ) : (
@@ -486,11 +740,14 @@ export function App() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
-  const [activeView, setActiveView] = useState<'home' | 'reports' | 'positions' | 'settings'>('home');
+  const [activeView, setActiveView] = useState<'home' | 'reports' | 'positions' | 'settings' | 'future-positions'>('home');
   const [homePage, setHomePage] = useState<HomePage>('home');
   const [userSettingsOpen, setUserSettingsOpen] = useState(false);
   const [positionPinsCount, setPositionPinsCount] = useState(0);
   const isAdmin = session?.user.roles.includes('hr_admin') ?? false;
+  const isDataTeam = session?.user.roles.includes('data_team') ?? false;
+  // Feature flags — Future Positions toggle (admin-controlled, gates the '+' button).
+  const [futureEnabled, setFutureEnabled] = useState(false);
   // System-wide messages: active announcements loaded from the server, plus
   // the set the current user has dismissed (per-user, persisted in localStorage).
   const [systemMessages, setSystemMessages] = useState<SystemMessage[]>([]);
@@ -500,8 +757,8 @@ export function App() {
     const saved = window.localStorage.getItem('hr-report-theme');
     return saved === 'dark' ? 'dark' : 'light';
   });
-  const [recordLayout, setRecordLayout] = useState<RecordSectionId[]>(() => loadRecordLayout(null));
-  const savedLayoutRef = useRef<RecordSectionId[]>(loadRecordLayout(null));
+  const [recordLayout, setRecordLayout] = useState<RecordLayout>(() => loadRecordLayout(null));
+  const savedLayoutRef = useRef<RecordLayout>(loadRecordLayout(null));
   const [layoutNotice, setLayoutNotice] = useState('');
 
   useEffect(() => {
@@ -555,6 +812,16 @@ export function App() {
     const dismissed = new Set<string>();
     loadDismissedFromStorage(dismissed);
     setDismissedMessages(dismissed);
+    return () => { cancelled = true; };
+  }, [session?.user?.id]);
+
+  // Load the Future Positions feature flag on user change.
+  useEffect(() => {
+    if (!session) { setFutureEnabled(false); return; }
+    let cancelled = false;
+    getFeatureFlag(session)
+      .then((flag) => { if (!cancelled) setFutureEnabled(flag.enabled); })
+      .catch(() => { if (!cancelled) setFutureEnabled(false); });
     return () => { cancelled = true; };
   }, [session?.user?.id]);
 
@@ -618,29 +885,28 @@ export function App() {
   }, [session, autoLoginAttempted]);
 
   function reorderRecordSection(from: number, to: number) {
-    setRecordLayout((prev) => {
-      const next = [...prev];
-      const [moved] = next.splice(from, 1);
-      next.splice(to, 0, moved);
-      return next;
-    });
+    setRecordLayout((prev) => reorderVisibleSections(prev, from, to));
   }
   function moveRecordSectionUp(index: number) {
     if (index <= 0) return;
-    reorderRecordSection(index, index - 1);
+    setRecordLayout((prev) => reorderVisibleSections(prev, index, index - 1));
   }
   function moveRecordSectionDown(index: number) {
     setRecordLayout((prev) => {
-      if (index >= prev.length - 1) return prev;
-      const next = [...prev];
-      const [moved] = next.splice(index, 1);
-      next.splice(index + 1, 0, moved);
-      return next;
+      const visibleCount = visibleSectionIds(prev).length;
+      if (index >= visibleCount - 1) return prev;
+      return reorderVisibleSections(prev, index, index + 1);
     });
+  }
+  function toggleSectionVisibility(id: RecordSectionId) {
+    setRecordLayout((prev) => setSectionVisible(prev, id, !(prev.find((item) => item.id === id)?.visible ?? true)));
+  }
+  function showAllSectionsNow() {
+    setRecordLayout((prev) => showAllSections(prev));
   }
   function saveRecordLayoutState() {
     saveRecordLayout(session?.user.id ?? null, recordLayout);
-    savedLayoutRef.current = [...recordLayout];
+    savedLayoutRef.current = recordLayout.map((item) => ({ ...item }));
     setLayoutNotice('Layout saved');
     window.setTimeout(() => setLayoutNotice(''), 2000);
   }
@@ -652,6 +918,7 @@ export function App() {
     window.setTimeout(() => setLayoutNotice(''), 2000);
   }
   const isLayoutDirty = !arraysEqual(recordLayout, savedLayoutRef.current);
+  const hiddenLayoutCount = hiddenSectionIds(recordLayout).length;
 
   async function submitLogin(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -690,8 +957,9 @@ export function App() {
     } catch { /* ignore */ }
   }
 
-  function navigate(view: 'home' | 'reports' | 'positions' | 'settings') {
+  function navigate(view: 'home' | 'reports' | 'positions' | 'settings' | 'future-positions') {
     if (view === 'settings' && !isAdmin) return;
+    if (view === 'future-positions' && !isDataTeam) return;
     setActiveView(view);
     setMenuOpen(false);
   }
@@ -746,10 +1014,16 @@ export function App() {
 
   useEffect(() => {
     if (!session) return;
-    void Promise.all([getSchools(), getPeople('', '')])
+    void Promise.all([getSchools(session), getPeople('', '', session)])
       .then(([nextSchools, nextPeople]) => {
         setSchools(nextSchools);
         setPeople(nextPeople.data);
+        // When a user can only see one school, default the People filter to it
+        // so the directory and dropdown reflect their own school only.
+        const restricted = !session.user.canViewAllSchools;
+        if (restricted && nextSchools.length === 1) {
+          setSchoolId(nextSchools[0].id);
+        }
       })
       .catch(() => setError('The lookup service is unavailable. Check that the API is running.'))
       .finally(() => setLoading(false));
@@ -759,7 +1033,7 @@ export function App() {
     setLoading(true);
     setError('');
     try {
-      const result = await getPeople(search, schoolId);
+      const result = await getPeople(search, schoolId, session);
       setPeople(result.data);
       setSelectedPerson(null);
       setPersonRecord(null);
@@ -792,7 +1066,7 @@ export function App() {
     let person = people.find((candidate) => candidate.employeeNumber === trimmed);
     if (!person) {
       try {
-        const result = await getPeople(trimmed, '');
+        const result = await getPeople(trimmed, '', session);
         person = result.data.find((candidate) => candidate.employeeNumber === trimmed) ?? result.data[0] ?? null;
         if (!person) {
           setSelectedPerson({ personId: trimmed, employeeNumber: trimmed } as Person);
@@ -852,7 +1126,7 @@ export function App() {
   function clearSearch() {
     setSearch('');
     setSchoolId('');
-    void getPeople('', '').then((result) => setPeople(result.data));
+    void getPeople('', '', session).then((result) => setPeople(result.data));
   }
 
   // Compute which system-wide announcements are visible for the current user.
@@ -888,7 +1162,7 @@ export function App() {
       {menuOpen && <button className="nav-scrim" aria-label="Close navigation" onClick={() => setMenuOpen(false)} />}
       <aside className={`side-navigation ${menuOpen ? 'open' : ''}`} aria-label="Main navigation">
         <div className="side-navigation-heading"><span className="brand-mark"><FileText size={18} /></span><strong>HR Reporting</strong><button className="icon-button" onClick={() => setMenuOpen(false)} aria-label="Close navigation" title="Close navigation"><X size={17} /></button></div>
-        <nav><button className={activeView === 'home' ? 'nav-item active' : 'nav-item'} onClick={() => navigate('home')}><Home size={18} /><span>Home</span></button><button className={activeView === 'reports' ? 'nav-item active' : 'nav-item'} onClick={() => navigate('reports')}><BarChart3 size={18} /><span>Reports</span></button><button className={activeView === 'positions' ? 'nav-item active' : 'nav-item'} onClick={() => navigate('positions')}><Pin size={18} /><span>Positions</span>{positionPinsCount > 0 && <span className="nav-count">{positionPinsCount}</span>}</button>{isAdmin && <button className={activeView === 'settings' ? 'nav-item active' : 'nav-item'} onClick={() => navigate('settings')}><SlidersHorizontal size={18} /><span>Report Configuration</span></button>}</nav>
+        <nav><button className={activeView === 'home' ? 'nav-item active' : 'nav-item'} onClick={() => navigate('home')}><Home size={18} /><span>Home</span></button><button className={activeView === 'reports' ? 'nav-item active' : 'nav-item'} onClick={() => navigate('reports')}><BarChart3 size={18} /><span>Reports</span></button><button className={activeView === 'positions' ? 'nav-item active' : 'nav-item'} onClick={() => navigate('positions')}><Pin size={18} /><span>Positions</span>{positionPinsCount > 0 && <span className="nav-count">{positionPinsCount}</span>}</button>{isDataTeam && <button className={activeView === 'future-positions' ? 'nav-item active' : 'nav-item'} onClick={() => navigate('future-positions')}><ClipboardCheck size={18} /><span>Future Positions</span></button>}{isAdmin && <button className={activeView === 'settings' ? 'nav-item active' : 'nav-item'} onClick={() => navigate('settings')}><SlidersHorizontal size={18} /><span>Report Configuration</span></button>}</nav>
       </aside>
       <header className="topbar">
         <button className="icon-button menu-trigger" onClick={() => setMenuOpen(true)} aria-label="Open navigation" title="Open navigation"><Menu size={21} /></button>
@@ -926,7 +1200,7 @@ export function App() {
         </div>
       )}
 
-      {activeView === 'reports' ? <ReportsPage schools={schools} session={session} onManage={isAdmin ? () => navigate('settings') : undefined} onOpenRecord={openRecordByEmployeeNumber} onOpenPosition={openPositionByNumber} /> : activeView === 'positions' ? <PositionsPage session={session} schools={schools} onOpenPosition={openPositionByNumber} /> : activeView === 'settings' ? (isAdmin && session ? <SettingsPage session={session} schools={schools} /> : <section className="reports-page"><div className="notice error"><AlertCircle size={18} /><span>Access denied. Admin access is required.</span></div></section>) : <>
+      {activeView === 'reports' ? <ReportsPage schools={schools} session={session} onManage={isAdmin ? () => navigate('settings') : undefined} onOpenRecord={openRecordByEmployeeNumber} onOpenPosition={openPositionByNumber} /> : activeView === 'positions' ? <PositionsPage session={session} schools={schools} onOpenPosition={openPositionByNumber} /> : activeView === 'future-positions' ? (isDataTeam && session ? <FuturePositionsPage session={session} onOpenPosition={openPositionByNumber} /> : <section className="reports-page"><div className="notice error"><AlertCircle size={18} /><span>Access denied. Data team access is required.</span></div></section>) : activeView === 'settings' ? (isAdmin && session ? <SettingsPage session={session} schools={schools} /> : <section className="reports-page"><div className="notice error"><AlertCircle size={18} /><span>Access denied. Admin access is required.</span></div></section>) : <>
       <section className="hero-band">
         <div>
           <p className="eyebrow">People directory</p>
@@ -957,7 +1231,7 @@ export function App() {
               <Building2 size={17} aria-hidden="true" />
               <span className="sr-only">Filter by school</span>
               <select value={schoolId} onChange={(event) => setSchoolId(event.target.value)}>
-                <option value="">All schools and departments</option>
+                {session.user.canViewAllSchools && <option value="">All schools and departments</option>}
                 {schools.map((school) => <option key={school.id} value={school.id}>{school.name}</option>)}
               </select>
               <ChevronDown size={15} aria-hidden="true" />
@@ -989,18 +1263,19 @@ export function App() {
         <button className="record-drawer-scrim" aria-label="Close drawer" onClick={closeRecord} />
         <aside className="record-drawer" role="dialog" aria-modal="true" aria-label={positionDetails || positionLoading || positionError ? 'Position details' : 'Employee record'}>
           {positionLoading ? <div className="empty-state"><span className="loader" />Loading position details</div> : positionError ? <div className="empty-state"><AlertCircle size={26} /><p>{positionError}</p></div> : positionDetails ? (
-            <PositionDetailView details={positionDetails} onClose={closeRecord} onOpenRecord={openRecordByEmployeeNumber} pinned={positionPinned} onTogglePin={() => void togglePositionPin()} session={session} />
+            <PositionDetailView details={positionDetails} onClose={closeRecord} onOpenRecord={openRecordByEmployeeNumber} pinned={positionPinned} onTogglePin={() => void togglePositionPin()} session={session} futureEnabled={futureEnabled} />
           ) : recordLoading ? <div className="empty-state"><span className="loader" />Loading employee record</div> : recordError ? <div className="empty-state"><AlertCircle size={26} /><p>{recordError}</p></div> : personRecord ? <>
             <div className="record-layout-toolbar">
-              <span className="record-layout-hint">Drag sections to reorder</span>
+              <span className="record-layout-hint">{hiddenLayoutCount > 0 ? `${hiddenLayoutCount} section${hiddenLayoutCount === 1 ? '' : 's'} hidden` : 'Drag sections to reorder'}</span>
               <span className="record-layout-actions">
+                {hiddenLayoutCount > 0 && <button className="back-button" onClick={showAllSectionsNow}><Eye size={14} />Show all sections</button>}
                 <button className="back-button" onClick={resetRecordLayoutState}>Reset to default</button>
                 <button className="export-button" onClick={saveRecordLayoutState} disabled={!isLayoutDirty}><Check size={14} />Save layout</button>
               </span>
             </div>
             {layoutNotice && <div className="notice success" role="status" aria-live="polite">{layoutNotice}</div>}
             <div aria-live="polite" className="sr-only">{layoutNotice}</div>
-            <EmployeeRecord record={personRecord} layout={recordLayout} userId={session?.user.id ?? null} onClose={closeRecord} onReorder={reorderRecordSection} onMoveUp={moveRecordSectionUp} onMoveDown={moveRecordSectionDown} onOpenPosition={openPositionByNumber} theme={theme} />
+            <EmployeeRecord record={personRecord} layout={recordLayout} userId={session?.user.id ?? null} onClose={closeRecord} onReorder={reorderRecordSection} onMoveUp={moveRecordSectionUp} onMoveDown={moveRecordSectionDown} onToggleVisibility={toggleSectionVisibility} onOpenPosition={openPositionByNumber} theme={theme} />
           </> : <div className="detail-placeholder"><Users size={28} /><h3>Select a person</h3><p>Choose a record from the directory to inspect the complete employee report.</p></div>}
         </aside>
       </>}

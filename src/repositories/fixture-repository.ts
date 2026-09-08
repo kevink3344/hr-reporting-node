@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import type {
+  FuturePosition,
   GenericReportRun,
   OpenPositionRow,
   Person,
@@ -19,6 +20,8 @@ import type {
   ViewDefinition
 } from '../types.js';
 import type {
+  FuturePositionInput,
+  FuturePositionUpdate,
   PositionCommentInput,
   PositionPinInput,
   Repositories,
@@ -482,7 +485,9 @@ export const fixtureRepositories: Repositories = {
   reportViewComments: buildFixtureReportViewComments(),
   positionPins: buildFixturePositionPins(),
   positionComments: buildFixturePositionComments(),
-  systemMessages: buildFixtureSystemMessages()
+  systemMessages: buildFixtureSystemMessages(),
+  futurePositions: buildFixtureFuturePositions(),
+  featureFlags: buildFixtureFeatureFlags()
 };
 
 function buildFixtureReportViews(): Repositories['reportViews'] {
@@ -855,6 +860,148 @@ function buildFixtureSystemMessages(): Repositories['systemMessages'] {
       if (idx === -1) return false;
       fixtureSystemMessages.splice(idx, 1);
       return true;
+    }
+  };
+}
+
+// ---- Future Positions (staged new incumbents) ----
+const fixtureFuturePositions: FuturePosition[] = [];
+
+function buildFixtureFuturePositions(): Repositories['futurePositions'] {
+  return {
+    async list(filter = {}) {
+      return fixtureFuturePositions
+        .filter((item) => {
+          if (filter.posNumber && item.posNumber !== filter.posNumber.trim()) return false;
+          if (filter.organization && item.organization !== filter.organization.trim()) return false;
+          if (filter.status && item.status !== filter.status) return false;
+          return true;
+        })
+        .slice()
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+        .map((item) => ({ ...item }));
+    },
+    async getById(id) {
+      const item = fixtureFuturePositions.find((candidate) => candidate.id === id);
+      return item ? { ...item } : null;
+    },
+    async getForPosition(posNumber, organization) {
+      const item = fixtureFuturePositions.find(
+        (candidate) => candidate.posNumber === posNumber.trim() && candidate.organization === organization.trim() && candidate.status !== 'completed'
+      );
+      return item ? { ...item } : null;
+    },
+    async create(input: FuturePositionInput) {
+      const exists = fixtureFuturePositions.some(
+        (candidate) => candidate.posNumber === input.posNumber.trim() && candidate.organization === input.organization.trim() && candidate.status !== 'completed'
+      );
+      if (exists) throw Object.assign(new Error('FUTURE_POSITION_EXISTS'), { code: 'FUTURE_POSITION_EXISTS' });
+      const now = nowIso();
+      const item: FuturePosition = {
+        id: newId(),
+        posNumber: input.posNumber.trim(),
+        posName: input.posName.trim(),
+        organization: input.organization.trim(),
+        accountNumber: input.accountNumber ?? null,
+        incumbentName: input.incumbentName ?? null,
+        employeeNumber: input.employeeNumber ?? null,
+        positionType: input.positionType ?? 'vacant',
+        hireDate: input.hireDate ?? null,
+        classroomAssigned: input.classroomAssigned ?? null,
+        contractType: input.contractType ?? null,
+        contractStartDate: input.contractStartDate ?? null,
+        contractEndDate: input.contractEndDate ?? null,
+        letterNeeded: input.letterNeeded ?? null,
+        notes: input.notes ?? null,
+        submittedBy: input.submittedBy,
+        submittedByName: input.submittedByName,
+        status: 'pending',
+        lockedAt: null,
+        completedAt: null,
+        createdAt: now,
+        updatedAt: now
+      };
+      fixtureFuturePositions.push(item);
+      return { ...item };
+    },
+    async update(id, patch: FuturePositionUpdate, callerId) {
+      const item = fixtureFuturePositions.find((candidate) => candidate.id === id);
+      if (!item) return null;
+      if (item.status !== 'pending') throw Object.assign(new Error('FUTURE_POSITION_LOCKED'), { code: 'FUTURE_POSITION_LOCKED' });
+      if (item.submittedBy !== callerId) throw Object.assign(new Error('FORBIDDEN'), { code: 'FORBIDDEN' });
+      if (patch.posName !== undefined) item.posName = patch.posName.trim();
+      if (patch.accountNumber !== undefined) item.accountNumber = patch.accountNumber;
+      if (patch.incumbentName !== undefined) item.incumbentName = patch.incumbentName;
+      if (patch.employeeNumber !== undefined) item.employeeNumber = patch.employeeNumber;
+      if (patch.positionType !== undefined) item.positionType = patch.positionType;
+      if (patch.hireDate !== undefined) item.hireDate = patch.hireDate;
+      if (patch.classroomAssigned !== undefined) item.classroomAssigned = patch.classroomAssigned;
+      if (patch.contractType !== undefined) item.contractType = patch.contractType;
+      if (patch.contractStartDate !== undefined) item.contractStartDate = patch.contractStartDate;
+      if (patch.contractEndDate !== undefined) item.contractEndDate = patch.contractEndDate;
+      if (patch.letterNeeded !== undefined) item.letterNeeded = patch.letterNeeded;
+      if (patch.notes !== undefined) item.notes = patch.notes;
+      item.updatedAt = nowIso();
+      return { ...item };
+    },
+    async sendNow(id, callerId) {
+      const item = fixtureFuturePositions.find((candidate) => candidate.id === id);
+      if (!item) return null;
+      if (item.status === 'completed') return { ...item };
+      if (item.status !== 'pending') throw Object.assign(new Error('FUTURE_POSITION_LOCKED'), { code: 'FUTURE_POSITION_LOCKED' });
+      if (item.submittedBy !== callerId) throw Object.assign(new Error('FORBIDDEN'), { code: 'FORBIDDEN' });
+      const now = nowIso();
+      item.status = 'locked';
+      item.lockedAt = now;
+      item.updatedAt = now;
+      return { ...item };
+    },
+    async complete(id, callerId) {
+      const item = fixtureFuturePositions.find((candidate) => candidate.id === id);
+      if (!item) return null;
+      if (item.status === 'completed') return { ...item };
+      if (item.status !== 'locked') throw Object.assign(new Error('FUTURE_POSITION_NOT_LOCKED'), { code: 'FUTURE_POSITION_NOT_LOCKED' });
+      const now = nowIso();
+      item.status = 'completed';
+      item.completedAt = now;
+      item.updatedAt = now;
+      return { ...item };
+    },
+    async autoLockPending() {
+      // Auto-lock any pending row older than 1 hour (deadline = created_at + 1h).
+      const cutoff = Date.now() - 60 * 60 * 1000;
+      for (const item of fixtureFuturePositions) {
+        const createdAtMs = new Date(item.createdAt).getTime();
+        if (item.status === 'pending' && createdAtMs <= cutoff) {
+          item.status = 'locked';
+          item.lockedAt = nowIso();
+          item.updatedAt = nowIso();
+        }
+      }
+    }
+  };
+}
+
+// ---- Feature flags (admin-gated toggles) ----
+const fixtureFeatureFlags = new Map<string, { key: string; enabled: boolean; updatedBy: string | null; updatedAt: string | null }>();
+fixtureFeatureFlags.set('future_positions', { key: 'future_positions', enabled: false, updatedBy: null, updatedAt: null });
+
+function buildFixtureFeatureFlags(): Repositories['featureFlags'] {
+  return {
+    async get(key) {
+      const flag = fixtureFeatureFlags.get(key);
+      return flag ? { ...flag } : null;
+    },
+    async set(key, enabled, updatedBy) {
+      const existing = fixtureFeatureFlags.get(key) ?? { key, enabled: false, updatedBy: null, updatedAt: null };
+      const next: { key: string; enabled: boolean; updatedBy: string | null; updatedAt: string | null } = {
+        key,
+        enabled,
+        updatedBy,
+        updatedAt: nowIso()
+      };
+      fixtureFeatureFlags.set(key, next);
+      return { ...next };
     }
   };
 }

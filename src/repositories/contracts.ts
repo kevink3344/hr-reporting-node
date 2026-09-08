@@ -1,4 +1,6 @@
 import type {
+  FuturePosition,
+  FuturePositionStatus,
   GenericReportRun,
   OpenPositionRow,
   Person,
@@ -236,6 +238,72 @@ export interface SystemMessagesRepository {
   delete(id: string): Promise<boolean>;
 }
 
+export type FuturePositionInput = {
+  posNumber: string;
+  posName: string;
+  organization: string;
+  accountNumber?: string | null;
+  incumbentName?: string | null;
+  employeeNumber?: string | null;
+  positionType?: 'vacant' | 'replacement' | 'new';
+  hireDate?: string | null;
+  classroomAssigned?: string | null;
+  contractType?: string | null;
+  contractStartDate?: string | null;
+  contractEndDate?: string | null;
+  letterNeeded?: 'Change' | 'Rehire' | 'Other' | null;
+  notes?: string | null;
+  submittedBy: string;
+  submittedByName: string;
+};
+
+export type FuturePositionUpdate = {
+  posName?: string;
+  accountNumber?: string | null;
+  incumbentName?: string | null;
+  employeeNumber?: string | null;
+  positionType?: 'vacant' | 'replacement' | 'new';
+  hireDate?: string | null;
+  classroomAssigned?: string | null;
+  contractType?: string | null;
+  contractStartDate?: string | null;
+  contractEndDate?: string | null;
+  letterNeeded?: 'Change' | 'Rehire' | 'Other' | null;
+  notes?: string | null;
+};
+
+export type FuturePositionListFilter = {
+  posNumber?: string;
+  organization?: string;
+  status?: FuturePositionStatus;
+};
+
+export interface FuturePositionsRepository {
+  list(filter?: FuturePositionListFilter): Promise<FuturePosition[]>;
+  getById(id: string): Promise<FuturePosition | null>;
+  getForPosition(posNumber: string, organization: string): Promise<FuturePosition | null>;
+  create(input: FuturePositionInput): Promise<FuturePosition>;
+  update(id: string, patch: FuturePositionUpdate, callerId: string): Promise<FuturePosition | null>;
+  /** pending -> locked ("Send now"). */
+  sendNow(id: string, callerId: string): Promise<FuturePosition | null>;
+  /** locked (or completed idempotently) -> completed. */
+  complete(id: string, callerId: string): Promise<FuturePosition | null>;
+  /** Auto-lock any pending row older than 1 hour. Idempotent; run before reads/writes. */
+  autoLockPending(): Promise<void>;
+}
+
+export type FeatureFlag = {
+  key: string;
+  enabled: boolean;
+  updatedBy: string | null;
+  updatedAt: string | null;
+};
+
+export interface FeatureFlagsRepository {
+  get(key: string): Promise<FeatureFlag | null>;
+  set(key: string, enabled: boolean, updatedBy: string | null): Promise<FeatureFlag>;
+}
+
 export type Repositories = {
   people: PeopleRepository;
   schools: SchoolsRepository;
@@ -250,4 +318,6 @@ export type Repositories = {
   positionPins: PositionPinsRepository;
   positionComments: PositionCommentsRepository;
   systemMessages: SystemMessagesRepository;
+  futurePositions: FuturePositionsRepository;
+  featureFlags: FeatureFlagsRepository;
 };

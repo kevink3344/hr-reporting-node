@@ -1,5 +1,6 @@
 import type { Value } from '@libsql/client';
 import type {
+  FuturePosition,
   GenericReportRowWithSubreport,
   GenericReportRun,
   OpenPositionRow,
@@ -19,6 +20,10 @@ import type {
   ViewDefinition
 } from '../types.js';
 import type {
+  FeatureFlag,
+  FuturePositionInput,
+  FuturePositionListFilter,
+  FuturePositionUpdate,
   PositionCommentInput,
   PositionPinInput,
   Repositories,
@@ -1100,8 +1105,238 @@ export const tursoRepositories: Repositories = {
       await query('DELETE FROM system_messages WHERE id = ?', [id]);
       return true;
     }
+  },
+  futurePositions: {
+    async list(filter: FuturePositionListFilter = {}) {
+      const clauses: string[] = [];
+      const params: Value[] = [];
+      if (filter.posNumber) { clauses.push('pos_number = ?'); params.push(filter.posNumber.trim()); }
+      if (filter.organization) { clauses.push('organization = ?'); params.push(filter.organization.trim()); }
+      if (filter.status) { clauses.push('status = ?'); params.push(filter.status); }
+      const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+      const rows = await query<FuturePositionRow>(
+        `SELECT * FROM future_positions ${where} ORDER BY updated_at DESC`,
+        params
+      );
+      return rows.map(toFuturePosition);
+    },
+    async getById(id) {
+      const rows = await query<FuturePositionRow>('SELECT * FROM future_positions WHERE id = ? LIMIT 1', [id]);
+      return rows[0] ? toFuturePosition(rows[0]) : null;
+    },
+    async getForPosition(posNumber, organization) {
+      const rows = await query<FuturePositionRow>(
+        'SELECT * FROM future_positions WHERE pos_number = ? AND organization = ? AND status != ? ORDER BY updated_at DESC LIMIT 1',
+        [posNumber.trim(), organization.trim(), 'completed']
+      );
+      return rows[0] ? toFuturePosition(rows[0]) : null;
+    },
+    async create(input: FuturePositionInput) {
+      const now = nowIso();
+      const id = newId();
+      const positionType = input.positionType ?? 'vacant';
+      // Enforce one active row per position (defensive; the partial unique
+      // index in Turso also enforces it).
+      const existing = await query<FuturePositionRow>(
+        'SELECT id FROM future_positions WHERE pos_number = ? AND organization = ? AND status != ? LIMIT 1',
+        [input.posNumber.trim(), input.organization.trim(), 'completed']
+      );
+      if (existing[0]) throw codedError('FUTURE_POSITION_EXISTS');
+      await query(
+        `INSERT INTO future_positions
+          (id, pos_number, pos_name, organization, account_number, incumbent_name,
+           employee_number, position_type, hire_date, classroom_assigned,
+           contract_type, contract_start_date, contract_end_date, letter_needed,
+           notes, submitted_by,
+           submitted_by_name, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+        [
+          id,
+          input.posNumber.trim(),
+          input.posName.trim(),
+          input.organization.trim(),
+          dbValue(input.accountNumber ?? null),
+          dbValue(input.incumbentName ?? null),
+          dbValue(input.employeeNumber ?? null),
+          positionType,
+          dbValue(input.hireDate ?? null),
+          dbValue(input.classroomAssigned ?? null),
+          dbValue(input.contractType ?? null),
+          dbValue(input.contractStartDate ?? null),
+          dbValue(input.contractEndDate ?? null),
+          dbValue(input.letterNeeded ?? null),
+          dbValue(input.notes ?? null),
+          input.submittedBy,
+          input.submittedByName,
+          now,
+          now
+        ]
+      );
+      const created = await query<FuturePositionRow>('SELECT * FROM future_positions WHERE id = ? LIMIT 1', [id]);
+      return toFuturePosition(created[0]);
+    },
+    async update(id, patch: FuturePositionUpdate, callerId) {
+      const existing = await query<FuturePositionRow>('SELECT * FROM future_positions WHERE id = ? LIMIT 1', [id]);
+      if (!existing[0]) return null;
+      const row = existing[0];
+      if (row.status !== 'pending') throw codedError('FUTURE_POSITION_LOCKED');
+      if (row.submitted_by !== callerId) throw codedError('FORBIDDEN');
+      // Map camelCase update keys to snake_case columns.
+      const columnByField: Record<string, string> = {
+        posName: 'pos_name',
+        accountNumber: 'account_number',
+        incumbentName: 'incumbent_name',
+        employeeNumber: 'employee_number',
+        positionType: 'position_type',
+        hireDate: 'hire_date',
+        classroomAssigned: 'classroom_assigned',
+        contractType: 'contract_type',
+        contractStartDate: 'contract_start_date',
+        contractEndDate: 'contract_end_date',
+        letterNeeded: 'letter_needed',
+        notes: 'notes'
+      };
+      const sets: string[] = [];
+      const params: Value[] = [];
+      for (const field of Object.keys(patch)) {
+        const column = columnByField[field];
+        if (!column) continue;
+        const value = patch[field as keyof FuturePositionUpdate];
+        if (value !== undefined) {
+          sets.push(` ${column} = ?`);
+          params.push(value === null ? null : typeof value === 'string' ? value.trim() : value);
+        }
+      }
+      const now = nowIso();
+      await query(
+        `UPDATE future_positions SET ${sets.length ? sets.join(',') + ',' : ''} updated_at = ? WHERE id = ?`,
+        [...params, now, id]
+      );
+      const updated = await query<FuturePositionRow>('SELECT * FROM future_positions WHERE id = ? LIMIT 1', [id]);
+      return toFuturePosition(updated[0]);
+    },
+    async sendNow(id, callerId) {
+      const existing = await query<FuturePositionRow>('SELECT * FROM future_positions WHERE id = ? LIMIT 1', [id]);
+      if (!existing[0]) return null;
+      const row = existing[0];
+      if (row.status === 'completed') return toFuturePosition(row);
+      if (row.status !== 'pending') throw codedError('FUTURE_POSITION_LOCKED');
+      if (row.submitted_by !== callerId) throw codedError('FORBIDDEN');
+      const now = nowIso();
+      await query(
+        "UPDATE future_positions SET status = 'locked', locked_at = ?, updated_at = ? WHERE id = ?",
+        [now, now, id]
+      );
+      const updated = await query<FuturePositionRow>('SELECT * FROM future_positions WHERE id = ? LIMIT 1', [id]);
+      return toFuturePosition(updated[0]);
+    },
+    async complete(id, callerId) {
+      const existing = await query<FuturePositionRow>('SELECT * FROM future_positions WHERE id = ? LIMIT 1', [id]);
+      if (!existing[0]) return null;
+      const row = existing[0];
+      if (row.status === 'completed') return toFuturePosition(row);
+      if (row.status !== 'locked') throw codedError('FUTURE_POSITION_NOT_LOCKED');
+      const now = nowIso();
+      await query(
+        "UPDATE future_positions SET status = 'completed', completed_at = ?, updated_at = ? WHERE id = ?",
+        [now, now, id]
+      );
+      const updated = await query<FuturePositionRow>('SELECT * FROM future_positions WHERE id = ? LIMIT 1', [id]);
+      return toFuturePosition(updated[0]);
+    },
+    async autoLockPending() {
+      // Auto-lock any pending row older than 1 hour. SQLite: julianday diff.
+      await query(
+        `UPDATE future_positions SET status = 'locked', locked_at = updated_at, updated_at = datetime('now')
+         WHERE status = 'pending' AND (julianday('now') - julianday(created_at)) * 24 > 1`
+      );
+    }
+  },
+  featureFlags: {
+    async get(key) {
+      const rows = await query<FeatureFlagRow>('SELECT * FROM feature_flags WHERE key = ? LIMIT 1', [key]);
+      return rows[0] ? toFeatureFlag(rows[0]) : null;
+    },
+    async set(key, enabled, updatedBy) {
+      const now = nowIso();
+      await query(
+        `INSERT INTO feature_flags (key, enabled, updated_by, updated_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT(key) DO UPDATE SET enabled = excluded.enabled, updated_by = excluded.updated_by, updated_at = excluded.updated_at`,
+        [key, enabled ? 1 : 0, dbValue(updatedBy), now]
+      );
+      const rows = await query<FeatureFlagRow>('SELECT * FROM feature_flags WHERE key = ? LIMIT 1', [key]);
+      return toFeatureFlag(rows[0]);
+    }
   }
 };
+
+type FeatureFlagRow = {
+  key: string;
+  enabled: number | null;
+  updated_by: string | null;
+  updated_at?: string | null;
+};
+
+function toFeatureFlag(row: FeatureFlagRow): FeatureFlag {
+  return {
+    key: String(row.key),
+    enabled: (row.enabled ?? 0) === 1,
+    updatedBy: row.updated_by ? String(row.updated_by) : null,
+    updatedAt: row.updated_at ? String(row.updated_at) : null
+  };
+}
+
+type FuturePositionRow = {
+  id: string;
+  pos_number: string;
+  pos_name: string;
+  organization: string;
+  account_number: string | null;
+  incumbent_name: string | null;
+  employee_number: string | null;
+  position_type: string;
+  hire_date: string | null;
+  classroom_assigned: string | null;
+  contract_type: string | null;
+  contract_start_date: string | null;
+  contract_end_date: string | null;
+  letter_needed: string | null;
+  notes: string | null;
+  submitted_by: string;
+  submitted_by_name: string;
+  status: string;
+  locked_at: string | null;
+  completed_at: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+function toFuturePosition(row: FuturePositionRow): FuturePosition {
+  return {
+    id: String(row.id),
+    posNumber: String(row.pos_number),
+    posName: String(row.pos_name),
+    organization: String(row.organization),
+    accountNumber: row.account_number ? String(row.account_number) : null,
+    incumbentName: row.incumbent_name ? String(row.incumbent_name) : null,
+    employeeNumber: row.employee_number ? String(row.employee_number) : null,
+    positionType: (row.position_type === 'replacement' || row.position_type === 'new' ? row.position_type : 'vacant'),
+    hireDate: row.hire_date ? String(row.hire_date) : null,
+    classroomAssigned: row.classroom_assigned ? String(row.classroom_assigned) : null,
+    contractType: row.contract_type ? String(row.contract_type) : null,
+    contractStartDate: row.contract_start_date ? String(row.contract_start_date) : null,
+    contractEndDate: row.contract_end_date ? String(row.contract_end_date) : null,
+    letterNeeded: (row.letter_needed === 'Change' || row.letter_needed === 'Rehire' || row.letter_needed === 'Other' ? row.letter_needed : null),
+    notes: row.notes ? String(row.notes) : null,
+    submittedBy: String(row.submitted_by),
+    submittedByName: String(row.submitted_by_name),
+    status: (row.status === 'locked' || row.status === 'completed' ? row.status : 'pending'),
+    lockedAt: row.locked_at ? String(row.locked_at) : null,
+    completedAt: row.completed_at ? String(row.completed_at) : null,
+    createdAt: String(row.created_at ?? ''),
+    updatedAt: String(row.updated_at ?? '')
+  };
+}
 
 type SystemMessageRow = {
   id: string;
