@@ -7,6 +7,21 @@
 PRAGMA foreign_keys = OFF;
 BEGIN;
 
+DELETE FROM schools;
+DELETE FROM position_info;
+DELETE FROM employee_info;
+DELETE FROM schools_example;
+DELETE FROM cert_info;
+DELETE FROM cert_area;
+DELETE FROM address;
+DELETE FROM leaves;
+DELETE FROM education_info;
+DELETE FROM mentor;
+DELETE FROM resignations;
+DELETE FROM employee_info_future;
+DELETE FROM assignment;
+DELETE FROM s_n_a;
+
 -- schools
 INSERT INTO schools (school_no, school_name, school_level, school_region, administrator, calendar, FLEX_VALUE_SET_ID, FLEX_VALUE_ID, FLEX_VALUE, address_1, City, State, Zip, Magnet) VALUES ('0302', 'Test Oak Elementary', 'Elementary School', 'Central', 'Principal 0302', 'Standard', '101', '0302', '0302', '1 Test Way', 'Testville', 'NC', '27700', 'No');
 INSERT INTO schools (school_no, school_name, school_level, school_region, administrator, calendar, FLEX_VALUE_SET_ID, FLEX_VALUE_ID, FLEX_VALUE, address_1, City, State, Zip, Magnet) VALUES ('0340', 'Test Maple Middle', 'Middle School', 'North', 'Principal 0340', 'Standard', '101', '0340', '0340', '1 Test Way', 'Testville', 'NC', '27700', 'No');

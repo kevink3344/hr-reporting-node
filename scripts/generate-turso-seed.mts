@@ -19,6 +19,32 @@ lines.push('');
 lines.push('PRAGMA foreign_keys = OFF;');
 lines.push('BEGIN;');
 lines.push('');
+// ---------------------------------------------------------------------
+// Idempotent re-seeding: clear every seeded table before inserting so a
+// re-run replaces the data instead of appending duplicate rows (the seed
+// emits plain INSERT — without this, re-applying seed.sql duplicates rows
+// such as the leave balances). Blank child tables are cleared too so a
+// stale row can never survive a re-seed.
+// ---------------------------------------------------------------------
+for (const table of [
+  'schools',
+  'position_info',
+  'employee_info',
+  'schools_example',
+  'cert_info',
+  'cert_area',
+  'address',
+  'leaves',
+  'education_info',
+  'mentor',
+  'resignations',
+  'employee_info_future',
+  'assignment',
+  's_n_a'
+]) {
+  lines.push(`DELETE FROM ${table};`);
+}
+lines.push('');
 
 const sql = (s: string) => lines.push(s);
 

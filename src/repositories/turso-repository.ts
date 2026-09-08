@@ -1679,7 +1679,16 @@ function buildRecord(
     lastUpdated: employee.last_updated ?? ''
   };
 
-  const leaveBalances = leaves.map((leave) => ({
+  // A person can have at most one balance per leave plan. Dedupe by
+  // accrual_plan so re-seeded/re-run data (which lacks a unique constraint)
+  // never surfaces duplicate leave rows to the client.
+  const leaveMap = new Map<string, NonNullable<LeaveRow>>();
+  for (const leave of leaves) {
+    const key = leave.accrual_plan ?? '';
+    if (!leaveMap.has(key)) leaveMap.set(key, leave);
+  }
+
+  const leaveBalances = Array.from(leaveMap.values()).map((leave) => ({
     leaveType: leave.accrual_plan ?? '',
     carryover: leave.Carryover ?? 0,
     accrued: leave.SumOfytd_accrued ?? 0,

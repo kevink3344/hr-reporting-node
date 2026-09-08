@@ -12,6 +12,7 @@ import type { RecordLayout, RecordSectionId } from './recordLayout';
 import { DEFAULT_SECTION_COLORS, SECTION_COLOR_OPTIONS, clearSectionColor, loadSectionColors, saveSectionColor, sectionHeaderColor } from './sectionColors';
 import { loadHomePage, saveHomePage } from './homePage';
 import type { HomePage } from './homePage';
+import { addRecentPerson, loadRecentPeople } from './recentPeople';
 
 const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
 
@@ -40,6 +41,50 @@ function SalaryToggleField({ annual, view, onToggle }: { annual: number; view: '
       <span>Proposed salary</span>
       <strong>{display} <em className="salary-period">{suffix}</em></strong>
     </div>
+  );
+}
+
+// Green doughnut countdown shown next to the "Incumbent" title while a staged
+// future incumbent is still editable (pending). The ring starts full and drains
+// clockwise over the one-hour window that began at creation; once the hour is up
+// the server auto-locks the record and the countdown disappears.
+function FutureCountdown({ createdAt }: { createdAt: string }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  // createdAt is a UTC "YYYY-MM-DD HH:MM:SS" string (turso datetime('now') /
+  // nowIso). Normalize to a real UTC timestamp so the deadline is correct
+  // regardless of the browser timezone.
+  const createdMs = new Date(createdAt.replace(' ', 'T') + 'Z').getTime();
+  const total = 60 * 60 * 1000; // one hour
+  const remaining = createdMs ? Math.max(0, createdMs + total - now) : 0;
+  if (!createdMs || remaining <= 0) return null;
+  const fraction = remaining / total;
+  // Draw a filled pie wedge (sector) starting from 12 o'clock, sweeping
+  // clockwise. The pie shrinks as the one-hour window drains.
+  const cx = 8;
+  const cy = 8;
+  const r = 7;
+  const start = -Math.PI / 2; // 12 o'clock
+  const end = start + fraction * 2 * Math.PI;
+  const x1 = cx + r * Math.cos(start);
+  const y1 = cy + r * Math.sin(start);
+  const x2 = cx + r * Math.cos(end);
+  const y2 = cy + r * Math.sin(end);
+  const largeArc = fraction > 0.5 ? 1 : 0;
+  const pie = `M ${cx} ${cy} L ${x1} ${y1} A ${r} ${r} 0 ${largeArc} 1 ${x2} ${y2} Z`;
+  const minutes = Math.floor(remaining / 60000);
+  const seconds = Math.floor((remaining % 60000) / 1000);
+  return (
+    <span className="future-countdown" title="Time left to edit this future incumbent" role="timer" aria-label={`${minutes} minutes ${seconds} seconds left to edit`}>
+      <svg className="future-countdown-pie" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+        <circle className="future-countdown-bg" cx={cx} cy={cy} r={r} />
+        <path className="future-countdown-fg" d={pie} />
+      </svg>
+      <span className="future-countdown-label">{minutes}:{seconds.toString().padStart(2, '0')}</span>
+    </span>
   );
 }
 
@@ -352,6 +397,7 @@ function PositionDetailView({ details, onClose, onOpenRecord, pinned, onTogglePi
       contractStartDate: incumbent.contractStart || '',
       contractEndDate: incumbent.contractEnd || ''
     }));
+    setIncumbentTab('future');
     setFuturePanelOpen(true);
   }
 
@@ -432,7 +478,10 @@ function PositionDetailView({ details, onClose, onOpenRecord, pinned, onTogglePi
           <RecordField label="SS200 code" value={position.ss200Code} />
           <RecordField label="Calendar" value={position.calendar} />
         </div>
-        <h4 className="record-section-title">Incumbent</h4>
+        <div className="position-incumbent-title">
+          <h4 className="record-section-title">Incumbent</h4>
+          {futureEnabled && future?.status === 'pending' && <FutureCountdown createdAt={future.createdAt} />}
+        </div>
         <div className="position-incumbent-tabs" role="tablist" aria-label="Incumbent sections">
           <button role="tab" aria-selected={incumbentTab === 'current'} className={`position-incumbent-tab ${incumbentTab === 'current' ? 'active' : ''}`} onClick={() => setIncumbentTab('current')}>
             <Users size={15} />Current
@@ -452,7 +501,7 @@ function PositionDetailView({ details, onClose, onOpenRecord, pinned, onTogglePi
                 )}
                 <button className="icon-button icon-button--bare" onClick={() => {
                   if (future?.status === 'locked') { showToast('Record is currently locked and cannot be edited'); return; }
-                  setFuturePanelOpen((open) => !open); setFutureError(''); setFutureNotice('');
+                  setIncumbentTab('future'); setFuturePanelOpen((open) => !open); setFutureError(''); setFutureNotice('');
                 }} aria-label="Stage a new incumbent" title="Stage a new incumbent (Future Positions)">
                   <UserPlus size={16} />
                 </button>
@@ -726,7 +775,14 @@ export function App() {
   const [loggingIn, setLoggingIn] = useState(false);
   const [autoLoginAttempted, setAutoLoginAttempted] = useState(false);
   const [schools, setSchools] = useState<School[]>([]);
+  // `people` holds the currently displayed directory rows. On landing it is the
+  // user's recently searched people; after an explicit search it is the results.
   const [people, setPeople] = useState<Person[]>([]);
+  // "Recently searched" people shown in the directory. Persisted per-user in
+  // localStorage so the landing list reflects opened records (most-recent first).
+  const [recentPeople, setRecentPeople] = useState<Person[]>(() => loadRecentPeople(session?.user.id ?? null));
+  // True once the user runs an explicit search; clears when returning to recent.
+  const [hasSearched, setHasSearched] = useState(false);
   const [search, setSearch] = useState('');
   const [schoolId, setSchoolId] = useState('');
   const [selectedPerson, setSelectedPerson] = useState<Person | null>(null);
@@ -1014,10 +1070,14 @@ export function App() {
 
   useEffect(() => {
     if (!session) return;
-    void Promise.all([getSchools(session), getPeople('', '', session)])
-      .then(([nextSchools, nextPeople]) => {
+    // Landing list is the user's recently searched people, not the first page
+    // of the directory. The full directory is only fetched on an explicit search.
+    const recent = loadRecentPeople(session.user.id);
+    setRecentPeople(recent);
+    setPeople(recent);
+    void getSchools(session)
+      .then((nextSchools) => {
         setSchools(nextSchools);
-        setPeople(nextPeople.data);
         // When a user can only see one school, default the People filter to it
         // so the directory and dropdown reflect their own school only.
         const restricted = !session.user.canViewAllSchools;
@@ -1032,6 +1092,8 @@ export function App() {
   async function runSearch() {
     setLoading(true);
     setError('');
+    // Performing an explicit search switches the directory to search results.
+    setHasSearched(true);
     try {
       const result = await getPeople(search, schoolId, session);
       setPeople(result.data);
@@ -1049,6 +1111,10 @@ export function App() {
     setPersonRecord(null);
     setRecordError('');
     setRecordLoading(true);
+    // Track the opened record in the user's recently searched list.
+    const userId = session?.user.id ?? null;
+    const nextRecent = addRecentPerson(userId, person);
+    setRecentPeople(nextRecent);
     try {
       setPersonRecord(await getPersonRecord(person.personId));
     } catch {
@@ -1126,7 +1192,11 @@ export function App() {
   function clearSearch() {
     setSearch('');
     setSchoolId('');
-    void getPeople('', '', session).then((result) => setPeople(result.data));
+    setHasSearched(false);
+    // Returning to no search shows the user's recent searches again.
+    const recent = loadRecentPeople(session?.user.id ?? null);
+    setRecentPeople(recent);
+    setPeople(recent);
   }
 
   // Compute which system-wide announcements are visible for the current user.
@@ -1207,7 +1277,7 @@ export function App() {
           <h2>Find the right record quickly.</h2>
           <p className="hero-copy">Search employee records by name, employee number, or organization.</p>
         </div>
-        <div className="hero-stat"><Users size={18} /><strong>{people.length}</strong><span>visible records</span></div>
+        <div className="hero-stat"><Users size={18} /><strong>{people.length}</strong><span>{hasSearched ? 'results' : 'recently searched'}</span></div>
       </section>
 
       <section className="workspace-grid" aria-label="People lookup">
@@ -1217,7 +1287,7 @@ export function App() {
               <p className="eyebrow">Directory</p>
               <h3>People lookup</h3>
             </div>
-            <span className="result-count">{people.length} results</span>
+            <span className="result-count">{people.length} {hasSearched ? 'results' : 'recent'}</span>
           </div>
 
           <div className="search-row">
@@ -1225,7 +1295,7 @@ export function App() {
               <Search size={18} aria-hidden="true" />
               <span className="sr-only">Search people</span>
               <input value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void runSearch(); }} placeholder="Name, employee number, or organization" />
-              {search && <button className="field-clear" onClick={() => setSearch('')} aria-label="Clear search" title="Clear search"><X size={15} /></button>}
+              {search && <button className="field-clear" onClick={() => { setSearch(''); setHasSearched(false); const recent = loadRecentPeople(session?.user.id ?? null); setRecentPeople(recent); setPeople(recent); }} aria-label="Clear search" title="Clear search"><X size={15} /></button>}
             </label>
             <label className="select-field">
               <Building2 size={17} aria-hidden="true" />
@@ -1240,7 +1310,7 @@ export function App() {
           </div>
 
           {error && <div className="notice error"><AlertCircle size={18} /><span>{error}</span></div>}
-          {loading ? <div className="empty-state"><span className="loader" />Loading directory</div> : people.length === 0 ? <div className="empty-state">No people match the current filters.</div> : (
+          {loading ? <div className="empty-state"><span className="loader" />Loading directory</div> : people.length === 0 ? <div className="empty-state">{hasSearched ? 'No people match the current filters.' : 'No recent searches.'}</div> : (
             <div className="table-wrap">
               <table>
                 <thead><tr><th>Person</th><th>Organization</th><th>Position</th><th>Employee no.</th><th><span className="sr-only">Open</span></th></tr></thead>

@@ -8,6 +8,7 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  ChevronUp,
   Clock,
   FileText,
   MessageSquare,
@@ -117,16 +118,20 @@ function GenericReportView({
   const [commentRowKey, setCommentRowKey] = useState<string | null>(null);
   const [activeHighlightFilterId, setActiveHighlightFilterId] = useState<string | null>(null);
   const filterDebounce = useRef<number | null>(null);
-  const columnsRef = useRef<HTMLDivElement | null>(null);
 
-  // Close the column picker when clicking outside it
+  // When the columns panel is open, lock body scroll and close on Escape
   useEffect(() => {
     if (!columnsOpen) return;
-    function onDocMouseDown(e: MouseEvent) {
-      if (columnsRef.current && !columnsRef.current.contains(e.target as Node)) setColumnsOpen(false);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setColumnsOpen(false);
     }
-    document.addEventListener('mousedown', onDocMouseDown);
-    return () => document.removeEventListener('mousedown', onDocMouseDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      document.removeEventListener('keydown', onKey);
+    };
   }, [columnsOpen]);
 
   // Normalize draft when columns change (e.g. report SQL changed)
@@ -279,6 +284,24 @@ function GenericReportView({
 
   function showAllColumns() {
     setDraft((prev) => ({ ...prev, hiddenColumns: [] }));
+  }
+
+  // Move a column one position left/right among the *visible* columns. Hidden
+  // columns keep their own slot in columnOrder so they don't jump around.
+  function moveColumn(column: string, dir: -1 | 1) {
+    setDraft((prev) => {
+      const visible = prev.columnOrder.filter((c) => !prev.hiddenColumns.includes(c));
+      const i = visible.indexOf(column);
+      const j = i + dir;
+      if (i === -1 || j < 0 || j >= visible.length) return prev;
+      const other = visible[j];
+      const order = [...prev.columnOrder];
+      const a = order.indexOf(column);
+      const b = order.indexOf(other);
+      order[a] = other;
+      order[b] = column;
+      return { ...prev, columnOrder: order };
+    });
   }
 
   function loadView(view: ReportView) {
@@ -510,42 +533,16 @@ function GenericReportView({
             <button className="field-clear" onClick={clearFilter} aria-label="Clear filter"><X size={14} /></button>
           )}
         </label>
-        <div className="report-columns-dropdown" ref={columnsRef}>
-          <button
-            className="report-columns-trigger"
-            onClick={() => setColumnsOpen((v) => !v)}
-            aria-expanded={columnsOpen}
-            aria-haspopup="listbox"
-            aria-label="Choose columns"
-          >
-            <Columns3 size={15} />
-            <span>Columns</span>
-            <ChevronDown size={14} className={columnsOpen ? 'chevron-open' : ''} />
-          </button>
-          {columnsOpen && (
-            <div className="report-columns-menu" role="listbox" aria-label="Columns">
-              <div className="report-columns-menu-head">
-                <span>{displayColumns.length} of {result.columns.length} shown</span>
-                <button className="link-button" onClick={showAllColumns}>Show all</button>
-              </div>
-              {result.columns.map((column) => {
-                const visible = !hiddenColumns.includes(column);
-                return (
-                  <button
-                    key={column}
-                    role="option"
-                    aria-selected={visible}
-                    className={`report-columns-option ${visible ? 'active' : ''}`}
-                    onClick={() => (visible ? hideColumn(column) : showColumn(column))}
-                  >
-                    <span className="report-columns-check">{visible && <Check size={14} />}</span>
-                    <span className="report-columns-name">{column}</span>
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </div>
+        <button
+          className="report-columns-trigger"
+          onClick={() => setColumnsOpen(true)}
+          aria-label="Choose columns"
+          title="Choose columns"
+        >
+          <Columns3 size={15} />
+          <span>Columns</span>
+          <span className="report-columns-count">{displayColumns.length}/{result.columns.length}</span>
+        </button>
         <span className="report-filter-count">
           {displayRows.length === result.rows.length
             ? `${displayRows.length} rows`
@@ -561,6 +558,69 @@ function GenericReportView({
           )}
         </span>
       </div>
+      {columnsOpen && (
+        <>
+          <div className="report-columns-backdrop" onClick={() => setColumnsOpen(false)} aria-hidden="true" />
+          <aside className="report-columns-panel" role="dialog" aria-modal="true" aria-label="Columns">
+            <div className="report-columns-panel-head">
+              <h3 className="report-columns-panel-title">Columns</h3>
+              <span className="report-columns-panel-meta">{displayColumns.length} of {result.columns.length} shown</span>
+              <button className="report-columns-close" onClick={() => setColumnsOpen(false)} aria-label="Close columns" title="Close"><X size={16} /></button>
+            </div>
+            <div className="report-columns-panel-tools">
+              <button className="link-button" onClick={showAllColumns}>Show all</button>
+            </div>
+            <div className="report-columns-panel-body" role="listbox" aria-label="Columns">
+              {draft.columnOrder.map((column) => {
+                const visible = !hiddenColumns.includes(column);
+                const visIndex = visible ? displayColumns.indexOf(column) : -1;
+                const first = visIndex === 0;
+                const last = visible && visIndex === displayColumns.length - 1;
+                return (
+                  <div key={column} className={`report-columns-row ${visible ? 'active' : ''}`}>
+                    <button
+                      role="option"
+                      aria-selected={visible}
+                      className={`report-columns-option ${visible ? 'active' : ''}`}
+                      onClick={() => (visible ? hideColumn(column) : showColumn(column))}
+                    >
+                      <span className="report-columns-check">{visible && <Check size={14} />}</span>
+                      <span className="report-columns-name">{column}</span>
+                    </button>
+                    {visible && (
+                      <span className="report-columns-move">
+                        <button
+                          className="report-columns-move-btn"
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); moveColumn(column, -1); }}
+                          disabled={first}
+                          aria-label={`Move ${column} up`}
+                          title="Move up"
+                        >
+                          <ChevronUp size={14} />
+                        </button>
+                        <button
+                          className="report-columns-move-btn"
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); moveColumn(column, 1); }}
+                          disabled={last}
+                          aria-label={`Move ${column} down`}
+                          title="Move down"
+                        >
+                          <ChevronDown size={14} />
+                        </button>
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            <div className="report-columns-panel-foot">
+              <button className="report-columns-done" onClick={() => setColumnsOpen(false)}>Done</button>
+            </div>
+          </aside>
+        </>
+      )}
       {hiddenColumns.length > 0 && (
         <div className="report-hidden-pill">
           <span>Hidden columns ({hiddenColumns.length})</span>
